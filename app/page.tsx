@@ -612,7 +612,13 @@ export default function Home() {
           }
         }
       }
-
+      
+      const parsedAmount = parseFloat(amount);
+if (isNaN(parsedAmount) || parsedAmount <= 0) {
+  toast({ message: "Invalid amount. Please enter a valid number.", type: "error" });
+  return;
+}
+      
       // Handle TON transaction
       try {
         await tonConnectUI.sendTransaction({
