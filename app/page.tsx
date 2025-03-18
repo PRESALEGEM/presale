@@ -45,6 +45,8 @@ interface Referral {
   referrer: string;
   totalAmount: number;
   referralCount: number;
+  validInvites: number;
+  eligibleInvites: number;
 }
 
 export default function Home() {
@@ -206,7 +208,9 @@ export default function Home() {
       const leaderboardData = querySnapshot.docs.map(doc => ({
         referrer: doc.id,
         totalAmount: 0, // Add default value or get from your data
-        referralCount: 0 // Add default value or get from your data
+        referralCount: 0, // Add default value or get from your data
+        validInvites: doc.data().validInvites || 0,
+        eligibleInvites: doc.data().eligibleInvites || 0
       }));
       
       setLeaderboard(leaderboardData);
