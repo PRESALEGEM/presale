@@ -301,8 +301,19 @@ export default function Home() {
 
   // Function to verify if a referral code is valid
   const verifyReferralCode = async (code: string) => {
-    if (!code || code.length < 5) return false;
-    
+    if (!code || code.length < 8) {
+      return false;
+    }
+  
+    // Prevent self-referral
+    if (code === userReferralCode) {
+      toast({
+        message: "You cannot use your own referral code",
+        type: "error"
+      });
+      return false;
+    }
+  
     try {
       const { data, error } = await supabase
         .from('referrals')
@@ -310,11 +321,10 @@ export default function Home() {
         .eq('referrer', code)
         .maybeSingle();
       
-      // If the code exists in the referrals table, it's valid
-      if (data) return true;
+      if (error) throw error;
       
-      // Otherwise check if it's a valid wallet address prefix (simplified check)
-      return code.length >= 8 && /^[A-Za-z0-9_-]+$/.test(code);
+      // Only return true if the code exists in the referrals table
+      return !!data;
     } catch (error) {
       console.error("Error verifying referral code:", error);
       return false;
@@ -680,6 +690,73 @@ export default function Home() {
       });
   };
 
+  const handleBindReferralCode = async () => {
+    if (!referralCode) {
+      toast({
+        message: "Please enter a referral code",
+        type: "error"
+      });
+      return;
+    }
+  
+    if (!connected || !walletAddress) {
+      toast({
+        message: "Please connect your wallet first",
+        type: "error"
+      });
+      return;
+    }
+  
+    // Check if user already has a referrer
+    const existingReferrer = await checkUserReferrer();
+    if (existingReferrer) {
+      toast({
+        message: "You already have a referrer bound",
+        type: "error"
+      });
+      return;
+    }
+  
+    // Verify the referral code
+    const isValid = await verifyReferralCode(referralCode);
+    if (!isValid) {
+      toast({
+        message: "Invalid referral code. Please check and try again",
+        type: "error"
+      });
+      return;
+    }
+  
+    try {
+      // Record the referral relationship in the database
+      const { error } = await supabase.from('user_referrals').insert([{
+        user: walletAddress,
+        referrer: referralCode,
+        timestamp: new Date().toISOString()
+      }]);
+  
+      if (error) throw error;
+  
+      // Save to localStorage only after successful database insert
+      localStorage.setItem('spiderReferrer', referralCode);
+      setSavedReferrer(referralCode);
+      
+      toast({
+        message: "Referral code bound successfully!",
+        type: "success"
+      });
+  
+      // Refresh referral stats
+      await fetchReferralStats();
+    } catch (err) {
+      console.error("Error binding referral code:", err);
+      toast({
+        message: "Failed to bind referral code. Please try again",
+        type: "error"
+      });
+    }
+  };
+
   if (error) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#1a1b3b] to-[#2a2b5b] flex items-center justify-center p-4">
@@ -888,53 +965,19 @@ export default function Home() {
                             disabled={!!savedReferrer}
                           />
                           <Button 
-                            onClick={async () => {
-                              if (!referralCode) {
-                                toast({
-                                  message: "Please enter a referral code.",
-                                  type: "error"
-                                });
-                                return;
-                              }
-                              
-                              if (savedReferrer) {
-                                toast({
-                                  message: "You already have a referral code bound.",
-                                  type: "info"
-                                });
-                                return;
-                              }
-                              
-                              // Verify if the referral code is valid
-                              const isValid = await verifyReferralCode(referralCode);
-                              if (!isValid) {
-                                toast({
-                                  message: "Invalid referral code. Please check and try again.",
-                                  type: "error"
-                                });
-                                return;
-                              }
-                              
-                              try {
-                                localStorage.setItem('spiderReferrer', referralCode);
-                                setSavedReferrer(referralCode);
-                                toast({
-                                  message: "Referral code bound successfully!",
-                                  type: "success"
-                                });
-                              } catch (err) {
-                                console.error("Error saving to local storage:", err);
-                                toast({
-                                  message: "Failed to save referral code.",
-                                  type: "error"
-                                });
-                              }
-                            }}
+                            onClick={handleBindReferralCode}
                             variant="default"
                             className="whitespace-nowrap bg-gradient-to-r from-[#3c28a7] to-[#9f2dfd] hover:from-[#3c28a7]/80 hover:to-[#9f2dfd]/80 text-white border-none"
-                            disabled={!!savedReferrer}
+                            disabled={!!savedReferrer || isLoading}
                           >
-                            Bind Code
+                            {isLoading ? (
+                              <>
+                                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                                Binding...
+                              </>
+                            ) : (
+                              'Bind Code'
+                            )}
                           </Button>
                         </div>
                         {savedReferrer && (
