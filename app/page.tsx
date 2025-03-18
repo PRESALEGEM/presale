@@ -336,19 +336,38 @@ export default function Home() {
       });
       return false;
     }
-  
-    // Check format: [0-9]:[a-fA-F0-9]{6}
-    const tonAddressFormat = /^[0-9]:[a-fA-F0-9]{6}$/;
-    
-    if (!tonAddressFormat.test(code)) {
+
+    // Check format: 8 characters long
+    if (code.length !== 8) {
       toast({
-        message: "Invalid format. Must be like '0:4d7f66'",
+        message: "Invalid referral code format. Must be 8 characters long.",
         type: "error"
       });
       return false;
     }
-  
-    return true;
+
+    // Verify referral code exists in database
+    try {
+      const referralDoc = doc(db, 'referrals', code);
+      const referralSnap = await getDoc(referralDoc);
+      
+      if (!referralSnap.exists()) {
+        toast({
+          message: "Invalid referral code. Code does not exist.",
+          type: "error"
+        });
+        return false;
+      }
+      
+      return true;
+    } catch (error) {
+      console.error("Error verifying referral code:", error);
+      toast({
+        message: "Error verifying referral code. Please try again.",
+        type: "error"
+      });
+      return false;
+    }
   };
 
   // Function to check user's referral stats
@@ -608,35 +627,28 @@ export default function Home() {
       return;
     }
   
-    // Check if user already has a referrer
-    const existingReferrer = await checkUserReferrer();
-    if (existingReferrer) {
-      toast({
-        message: "You already have a referrer bound",
-        type: "error"
-      });
-      return;
-    }
-  
-    // Verify the referral code
-    const isValid = await verifyReferralCode(referralCode);
-    if (!isValid) {
-      toast({
-        message: "Invalid referral code. Please check and try again",
-        type: "error"
-      });
-      return;
-    }
-  
     try {
-      // Record the referral relationship in the database
+      // Check if user already has a referrer
+      const existingReferrer = await checkUserReferrer();
+      if (existingReferrer) {
+        toast({
+          message: "You already have a referrer bound",
+          type: "error"
+        });
+        return;
+      }
+  
+      // Verify the referral code
+      const isValid = await verifyReferralCode(referralCode);
+      if (!isValid) return;
+  
+      // Record the referral relationship
       await setDoc(doc(db, 'user_referrals', walletAddress), {
         user: walletAddress,
         referrer: referralCode,
         timestamp: new Date().toISOString()
       });
   
-      // Save to localStorage only after successful database insert
       localStorage.setItem('spiderReferrer', referralCode);
       setSavedReferrer(referralCode);
       
@@ -645,8 +657,9 @@ export default function Home() {
         type: "success"
       });
   
-      // Refresh referral stats
+      // Refresh stats
       await fetchReferralStats();
+      
     } catch (err) {
       console.error("Error binding referral code:", err);
       toast({
