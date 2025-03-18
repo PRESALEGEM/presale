@@ -49,6 +49,15 @@ interface Referral {
   eligibleInvites: number;
 }
 
+// Add this new interface after the existing interfaces
+interface ReferrerStats {
+  referrer: string;
+  totalAmount: number;
+  referralCount: number;
+  validInvites: number;
+  eligibleInvites: number;
+}
+
 export default function Home() {
   const [tonConnectUI] = useTonConnectUI();
   const [connected, setConnected] = useState(false);
@@ -241,33 +250,80 @@ export default function Home() {
     }
   };
 
+  // Replace the existing fetchLeaderboard function with this updated version
   const fetchLeaderboard = async () => {
     setIsFetchingLeaderboard(true);
     try {
-      const referralsRef = collection(db, 'referrals');
-      const q = query(
-        referralsRef,
-        orderBy('totalAmount', 'desc'),
-        limit(10)
-      );
-      
-      const querySnapshot = await getDocs(q);
-      const leaderboardData = querySnapshot.docs.map(doc => ({
-        referrer: doc.id,
-        totalAmount: doc.data().totalAmount || 0,
-        referralCount: doc.data().referralCount || 0,
-        validInvites: doc.data().validInvites || 0,
-        eligibleInvites: doc.data().eligibleInvites || 0
-      }));
-      
+      // Get all user_referrals documents
+      const userReferralsRef = collection(db, 'user_referrals');
+      const userReferralsSnap = await getDocs(userReferralsRef);
+
+      // Create a map to store referrer stats
+      const referrerStatsMap = new Map<string, ReferrerStats>();
+
+      // Process each referral relationship
+      for (const doc of userReferralsSnap.docs) {
+        const data = doc.data();
+        const referrer = data.referrer;
+
+        // Initialize or update referrer stats
+        if (!referrerStatsMap.has(referrer)) {
+          referrerStatsMap.set(referrer, {
+            referrer: referrer,
+            totalAmount: 0,
+            referralCount: 1,
+            validInvites: 0,
+            eligibleInvites: 0
+          });
+        } else {
+          const stats = referrerStatsMap.get(referrer)!;
+          stats.referralCount++;
+          referrerStatsMap.set(referrer, stats);
+        }
+      }
+
+      // Get purchases to calculate amounts and validate invites
+      const purchasesRef = collection(db, 'purchases');
+      const purchasesSnap = await getDocs(purchasesRef);
+
+      for (const doc of purchasesSnap.docs) {
+        const purchase = doc.data();
+        const buyer = purchase.buyer;
+        
+        // Find if buyer has a referrer
+        const userReferralDoc = await getDoc(doc(db, 'user_referrals', buyer));
+        
+        if (userReferralDoc.exists()) {
+          const referrer = userReferralDoc.data().referrer;
+          const stats = referrerStatsMap.get(referrer);
+          
+          if (stats) {
+            stats.totalAmount += purchase.amount;
+            stats.validInvites++;
+            
+            // Check if purchase makes this an eligible invite (100+ SPIDER)
+            if (purchase.amount >= 100) {
+              stats.eligibleInvites++;
+            }
+            
+            referrerStatsMap.set(referrer, stats);
+          }
+        }
+      }
+
+      // Convert map to array and sort by total amount
+      const leaderboardData = Array.from(referrerStatsMap.values())
+        .sort((a, b) => b.totalAmount - a.totalAmount)
+        .slice(0, 10); // Get top 10
+
       setLeaderboard(leaderboardData);
     } catch (error) {
       console.error("Error fetching leaderboard:", error);
       setLeaderboard([]);
     } finally {
       setIsFetchingLeaderboard(false);
-    }
-  };
+  }
+};
 
   // Function to check if user has a referrer
   const checkUserReferrer = async () => {
@@ -441,6 +497,7 @@ export default function Home() {
     }
   };
 
+  // Update the existing handleBuy function to track purchases
   const handleBuy = async () => {
     setError(null);
     setIsLoading(true);
@@ -474,6 +531,13 @@ export default function Home() {
         localStorage.setItem('spiderReferrer', referralCode);
         setSavedReferrer(referralCode);
       }
+
+      // Record the purchase
+      await setDoc(doc(db, 'purchases', `${walletAddress}_${Date.now()}`), {
+        buyer: walletAddress,
+        amount: parseFloat(amount),
+        timestamp: new Date().toISOString()
+      });
 
       // Proceed with the transaction
       await tonConnectUI.sendTransaction({
