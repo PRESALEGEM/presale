@@ -131,7 +131,7 @@ export default function Home() {
   useEffect(() => {
     const checkConnection = async () => {
       try {
-        const wallet = await tonConnectUI.getWalletInfo();
+        const wallet = tonConnectUI.wallet;
         if (wallet) {
           const walletAddress = wallet.account.address;
           const referralCode = walletAddress.slice(0, 8);
