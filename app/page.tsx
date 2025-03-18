@@ -876,7 +876,7 @@ export default function Home() {
       });
   
       if (savedReferrer) {
-        await distributeReferralRewards(savedReferrer, purchaseAmount);
+        await distributeReferralRewards(savedReferrer, walletAddress);
       }
   
       // Refresh all data
