@@ -253,56 +253,45 @@ export default function Home() {
     }
   };
 
-  // Replace the existing fetchLeaderboard function with this updated version
   const fetchLeaderboard = async () => {
     setIsFetchingLeaderboard(true);
     try {
-      // Get all purchases first
+      // Get all purchases first to calculate total amounts
       const purchasesRef = collection(db, 'purchases');
       const purchasesSnap = await getDocs(purchasesRef);
+      const purchasesByReferrer = new Map<string, number>();
 
-      // Create a map to store referrer stats
-      const referrerStatsMap = new Map<string, ReferrerStats>();
-
-      // Process each purchase
-      for (const purchaseDoc of purchasesSnap.docs) {
-        const purchase = purchaseDoc.data();
-        const buyer = purchase.buyer;
-        
-        // Get the referrer information for this buyer
-        const userReferralRef = doc(db, 'user_referrals', buyer);
-        const userReferralSnap = await getDoc(userReferralRef);
-        
-        if (userReferralSnap.exists()) {
-          const referralData = userReferralSnap.data();
-          const referrer = referralData.referrer;
-          
-          // Initialize or update referrer stats
-          if (!referrerStatsMap.has(referrer)) {
-            referrerStatsMap.set(referrer, {
-              referrer: referrer,
-              totalAmount: purchase.amount || 0,
-              referralCount: 1,
-              validInvites: 1,
-              eligibleInvites: purchase.amount >= 100 ? 1 : 0
-            });
-          } else {
-            const stats = referrerStatsMap.get(referrer)!;
-            stats.totalAmount += purchase.amount || 0;
-            stats.referralCount++;
-            stats.validInvites++;
-            if (purchase.amount >= 100) {
-              stats.eligibleInvites++;
-            }
-            referrerStatsMap.set(referrer, stats);
-          }
+      // Calculate total amounts from purchases
+      for (const doc of purchasesSnap.docs) {
+        const purchase = doc.data();
+        if (purchase.referrer && purchase.amount) {
+          purchasesByReferrer.set(
+            purchase.referrer, 
+            (purchasesByReferrer.get(purchase.referrer) || 0) + purchase.amount
+          );
         }
       }
 
-      // Convert map to array and sort by total amount
-      const leaderboardData = Array.from(referrerStatsMap.values())
+      // Get all players
+      const playersRef = collection(db, 'players');
+      const playersSnap = await getDocs(playersRef);
+      
+      const leaderboardData = playersSnap.docs
+        .map(doc => {
+          const data = doc.data();
+          return {
+            referrer: doc.id,
+            totalAmount: purchasesByReferrer.get(doc.id) || 0,
+            validInvites: data.validInvites?.total || 0,
+            eligibleInvites: data.eligibleInvites?.total || 0,
+            referralCount: data.totalInvites || 0
+          };
+        })
+        // Only include players who have valid invites
+        .filter(player => player.validInvites > 0)
+        // Sort by total amount spent by referrals
         .sort((a, b) => b.totalAmount - a.totalAmount)
-        .slice(0, 10); // Get top 10
+        .slice(0, 10);
 
       setLeaderboard(leaderboardData);
     } catch (error) {
@@ -379,26 +368,26 @@ export default function Home() {
     if (!connected || !userReferralCode) return;
     
     try {
-      // Get referrer document
-      const referrerDoc = doc(db, 'referrals', userReferralCode);
-      const referrerSnap = await getDoc(referrerDoc);
+      const playerDoc = doc(db, 'players', userReferralCode);
+      const playerSnap = await getDoc(playerDoc);
       
-      if (referrerSnap.exists()) {
-        const data = referrerSnap.data();
+      if (playerSnap.exists()) {
+        const data = playerSnap.data();
         setReferralStats({
-          invalidInvites: data.invalidInvites || 0,
-          validInvites: data.validInvites || 0,
-          eligibleInvites: data.eligibleInvites || 0
+          invalidInvites: data.invalidInvites?.total || 0,
+          validInvites: data.validInvites?.total || 0,
+          eligibleInvites: data.eligibleInvites?.total || 0
         });
+        setFeedersBalance(data.feeders || 0);
       } else {
-        // Initialize stats if referrer document doesn't exist
-        await setDoc(referrerDoc, {
-          totalAmount: 0,
-          referralCount: 0,
-          validInvites: 0,
-          eligibleInvites: 0,
-          invalidInvites: 0,
-          lastUpdated: new Date().toISOString()
+        // Initialize player document if it doesn't exist
+        await setDoc(playerDoc, {
+          walletAddress: walletAddress,
+          feeders: 0,
+          totalInvites: 0,
+          eligibleInvites: { total: 0, referrals: [] },
+          validInvites: { total: 0, referrals: [] },
+          invalidInvites: { total: 0, referrals: [] }
         });
         
         setReferralStats({
@@ -406,13 +395,10 @@ export default function Home() {
           validInvites: 0,
           eligibleInvites: 0
         });
+        setFeedersBalance(0);
       }
     } catch (error) {
       console.error("Error fetching referral stats:", error);
-      toast({
-        message: "Failed to fetch referral stats",
-        type: "error"
-      });
     }
   };
 
@@ -522,34 +508,36 @@ export default function Home() {
         throw new Error("Please enter a valid amount.");
       }
 
-      // Create a batch for atomic operations
-      const batch = writeBatch(db);
-      
-      // Prepare purchase document
-      const purchaseRef = doc(db, 'purchases', `${walletAddress}_${Date.now()}`);
-      batch.set(purchaseRef, {
-        buyer: walletAddress,
-        amount: parseFloat(amount),
-        timestamp: new Date().toISOString(),
-        status: 'pending'
+      // Use transaction instead of batch for atomicity
+      await runTransaction(db, async (transaction) => {
+        // Create purchase record
+        const purchaseRef = doc(db, 'purchases', `${walletAddress}_${Date.now()}`);
+        transaction.set(purchaseRef, {
+          buyer: walletAddress,
+          amount: parseFloat(amount),
+          timestamp: new Date().toISOString(),
+          status: 'pending',
+          referrer: savedReferrer || null // Track referrer in purchase
+        });
+
+        // Update referral stats if there's a referrer
+        if (savedReferrer) {
+          const referrerDoc = doc(db, 'referrals', savedReferrer);
+          const referrerSnap = await transaction.get(referrerDoc);
+
+          if (referrerSnap.exists()) {
+            const currentStats = referrerSnap.data();
+            transaction.update(referrerDoc, {
+              totalAmount: (currentStats.totalAmount || 0) + parseFloat(amount),
+              validInvites: (currentStats.validInvites || 0) + 1,
+              eligibleInvites: (currentStats.eligibleInvites || 0) + (parseFloat(amount) >= 100 ? 1 : 0),
+              lastUpdated: new Date().toISOString()
+            });
+          }
+        }
       });
 
-      // If there's a referral, update referral data
-      if (savedReferrer || referralCode) {
-        const referrerToUse = savedReferrer || referralCode;
-        const referralRef = doc(db, 'referrals', referrerToUse);
-        
-        batch.update(referralRef, {
-          totalAmount: increment(parseFloat(amount)),
-          referralCount: increment(1),
-          lastUpdated: new Date().toISOString()
-        });
-      }
-
-      // Commit the batch
-      await batch.commit();
-
-      // Proceed with transaction
+      // Proceed with blockchain transaction
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 600,
         messages: [
@@ -560,33 +548,22 @@ export default function Home() {
         ]
       });
 
-      // If transaction successful, update referral stats
-      if (savedReferrer || referralCode) {
-        const referrerToUse = savedReferrer || referralCode;
-        await distributeReferralRewards(referrerToUse, parseFloat(amount));
-      }
-
-      // Refresh data
+      // Refresh all data after successful transaction
       await Promise.all([
         fetchBalances(),
         fetchLeaderboard(),
         fetchReferralStats()
       ]);
 
-      // Clear input fields
+      // Clear form
       setAmount("");
-      if (!savedReferrer) {
-        setReferralCode("");
-      }
-
       toast({
-        message: "Transaction completed successfully!",
+        message: "Purchase successful!",
         type: "success"
       });
 
     } catch (error: any) {
       console.error("Transaction error:", error);
-      setError(error.message || "Transaction failed. Please try again.");
       toast({
         message: error.message || "Transaction failed. Please try again.",
         type: "error"
