@@ -250,6 +250,17 @@ export default function Home() {
     }
   }, [connected, walletAddress]);
 
+  // Add new effect to refresh stats on page load
+  useEffect(() => {
+    if (connected && walletAddress && userReferralCode) {
+      Promise.all([
+        fetchReferralStats(),
+        fetchFeedersBalance(),
+        fetchLeaderboard()
+      ]);
+    }
+  }, [connected, walletAddress, userReferralCode]);
+
   const fetchBalances = async (address?: string) => {
     if (!address && !walletAddress) return;
     
@@ -292,44 +303,55 @@ export default function Home() {
     }
   };
 
+  // Update fetchLeaderboard function
   const fetchLeaderboard = async () => {
     setIsFetchingLeaderboard(true);
     try {
-      // Get all purchases first to calculate total amounts
+      // Get all players first
+      const playersRef = collection(db, 'players');
+      const playersSnap = await getDocs(playersRef);
+      const playersData = new Map<string, PlayerData>();
+      
+      // Create map of player data
+      playersSnap.docs.forEach(doc => {
+        playersData.set(doc.id, doc.data() as PlayerData);
+      });
+
+      // Get purchases data
       const purchasesRef = collection(db, 'purchases');
       const purchasesSnap = await getDocs(purchasesRef);
       const purchasesByReferrer = new Map<string, number>();
 
-      // Calculate total amounts from purchases
-      for (const doc of purchasesSnap.docs) {
+      // Calculate total amounts and valid purchases
+      purchasesSnap.docs.forEach(doc => {
         const purchase = doc.data();
         if (purchase.referrer && purchase.amount) {
-          purchasesByReferrer.set(
-            purchase.referrer, 
-            (purchasesByReferrer.get(purchase.referrer) || 0) + purchase.amount
-          );
+          const currentAmount = purchasesByReferrer.get(purchase.referrer) || 0;
+          purchasesByReferrer.set(purchase.referrer, currentAmount + purchase.amount);
         }
-      }
+      });
 
-      // Get all players
-      const playersRef = collection(db, 'players');
-      const playersSnap = await getDocs(playersRef);
-      
-      const leaderboardData = playersSnap.docs
-        .map(doc => {
-          const data = doc.data();
-          return {
-            referrer: doc.id,
-            totalAmount: purchasesByReferrer.get(doc.id) || 0,
-            validInvites: data.validInvites?.total || 0,
-            eligibleInvites: data.eligibleInvites?.total || 0,
-            referralCount: data.totalInvites || 0
-          };
-        })
-        // Only include players who have valid invites
+      // Combine data and create leaderboard
+      const leaderboardData = Array.from(playersData.entries())
+        .map(([id, data]) => ({
+          referrer: id,
+          totalAmount: purchasesByReferrer.get(id) || 0,
+          validInvites: data.validInvites?.referrals?.length || 0,
+          eligibleInvites: data.eligibleInvites?.referrals?.length || 0,
+          referralCount: data.invalidInvites?.referrals?.length || 0
+        }))
+        // Filter out players with no valid invites
         .filter(player => player.validInvites > 0)
-        // Sort by total amount spent by referrals
-        .sort((a, b) => b.totalAmount - a.totalAmount)
+        // Sort first by total amount, then by eligible invites, then by valid invites
+        .sort((a, b) => {
+          if (b.totalAmount !== a.totalAmount) {
+            return b.totalAmount - a.totalAmount;
+          }
+          if (b.eligibleInvites !== a.eligibleInvites) {
+            return b.eligibleInvites - a.eligibleInvites;
+          }
+          return b.validInvites - a.validInvites;
+        })
         .slice(0, 10);
 
       setLeaderboard(leaderboardData);
@@ -338,6 +360,51 @@ export default function Home() {
       setLeaderboard([]);
     } finally {
       setIsFetchingLeaderboard(false);
+    }
+  };
+
+  // Update fetchReferralStats to handle the referrer's stats
+  const fetchReferralStats = async () => {
+    if (!connected || !userReferralCode) return;
+    
+    try {
+      const playerDoc = doc(db, 'players', userReferralCode);
+      const playerSnap = await getDoc(playerDoc);
+      
+      if (playerSnap.exists()) {
+        const data = playerSnap.data() as PlayerData;
+        
+        // Get unique referrals counting
+        const invalidInvites = new Set(data.invalidInvites?.referrals || []);
+        const validInvites = new Set(data.validInvites?.referrals || []);
+        const eligibleInvites = new Set(data.eligibleInvites?.referrals || []);
+
+        setReferralStats({
+          invalidInvites: invalidInvites.size,
+          validInvites: validInvites.size,
+          eligibleInvites: eligibleInvites.size
+        });
+        setFeedersBalance(data.feeders || 0);
+      } else {
+        // Initialize if doesn't exist
+        await setDoc(playerDoc, {
+          walletAddress: walletAddress,
+          feeders: 0,
+          totalInvites: 0,
+          eligibleInvites: { total: 0, referrals: [] },
+          validInvites: { total: 0, referrals: [] },
+          invalidInvites: { total: 0, referrals: [] }
+        });
+        
+        setReferralStats({
+          invalidInvites: 0,
+          validInvites: 0,
+          eligibleInvites: 0
+        });
+        setFeedersBalance(0);
+      }
+    } catch (error) {
+      console.error("Error fetching referral stats:", error);
     }
   };
 
@@ -411,24 +478,25 @@ export default function Home() {
       const playerSnap = await getDoc(playerDoc);
       
       if (playerSnap.exists()) {
-        const data = playerSnap.data();
+        const data = playerSnap.data() as PlayerData;
+        // Update the stats from the actual invite lists
         setReferralStats({
-          invalidInvites: data.invalidInvites?.total || 0,
-          validInvites: data.validInvites?.total || 0,
-          eligibleInvites: data.eligibleInvites?.total || 0
+          invalidInvites: data.invalidInvites?.referrals?.length || 0,
+          validInvites: data.validInvites?.referrals?.length || 0,
+          eligibleInvites: data.eligibleInvites?.referrals?.length || 0
         });
         setFeedersBalance(data.feeders || 0);
       } else {
         // Initialize player document if it doesn't exist
-        await setDoc(playerDoc, {
+        const initialData = {
           walletAddress: walletAddress,
           feeders: 0,
           totalInvites: 0,
           eligibleInvites: { total: 0, referrals: [] },
           validInvites: { total: 0, referrals: [] },
           invalidInvites: { total: 0, referrals: [] }
-        });
-        
+        };
+        await setDoc(playerDoc, initialData);
         setReferralStats({
           invalidInvites: 0,
           validInvites: 0,
@@ -456,79 +524,98 @@ export default function Home() {
   };
 
   // Function to distribute rewards for referrals
-  const distributeReferralRewards = async (referrerCode: string, amount: number) => {
-    if (!walletAddress || !referrerCode) return;
+  const distributeReferralRewards = async (referrerCode: string, buyerAddress: string) => {
+    if (!referrerCode || !buyerAddress) return;
     
     try {
-      // First, verify the referrer exists
-      const referrerDoc = doc(db, 'referrals', referrerCode);
-      const referrerSnap = await getDoc(referrerDoc);
-      
-      if (!referrerSnap.exists()) {
-        console.error("Could not find referrer");
-        return;
-      }
-      
-      // Award 5 feeders to both parties
+      const batch = writeBatch(db);
       const FEEDERS_REWARD = 5;
-      
-      // Update referrer's feeders balance
-      await updateFeedersBalance(referrerCode, FEEDERS_REWARD);
-      
-      // Update invited user's feeders balance
-      await updateFeedersBalance(walletAddress, FEEDERS_REWARD);
-      
-      // Record the rewards
-      await Promise.all([
-        // Record referrer reward
-        setDoc(doc(db, 'rewards', `${referrerCode}_referrer_feeders`), {
-          user: referrerCode,
-          amount: FEEDERS_REWARD,
-          type: 'referrer_feeders',
-          timestamp: new Date().toISOString()
-        }),
-        
-        // Record invited user reward
-        setDoc(doc(db, 'rewards', `${walletAddress}_invited_feeders`), {
-          user: walletAddress,
-          amount: FEEDERS_REWARD,
-          type: 'invited_feeders',
-          timestamp: new Date().toISOString()
-        })
+      const timestamp = new Date().toISOString();
+  
+      // Get current balances
+      const [referrerBalanceDoc, buyerBalanceDoc] = await Promise.all([
+        getDoc(doc(db, 'feeders_balances', referrerCode)),
+        getDoc(doc(db, 'feeders_balances', buyerAddress))
       ]);
-      
-      // Refresh the feeders balance
-      await fetchFeedersBalance();
-      
+  
+      // Update referrer's feeders
+      batch.set(doc(db, 'feeders_balances', referrerCode), {
+        balance: (referrerBalanceDoc.exists() ? referrerBalanceDoc.data().balance : 0) + FEEDERS_REWARD,
+        last_updated: timestamp
+      }, { merge: true });
+  
+      // Update buyer's feeders
+      batch.set(doc(db, 'feeders_balances', buyerAddress), {
+        balance: (buyerBalanceDoc.exists() ? buyerBalanceDoc.data().balance : 0) + FEEDERS_REWARD,
+        last_updated: timestamp
+      }, { merge: true });
+  
+      // Record rewards
+      const rewardId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      batch.set(doc(db, 'rewards', `${referrerCode}_${rewardId}`), {
+        user: referrerCode,
+        amount: FEEDERS_REWARD,
+        type: 'referrer_reward',
+        purchaser: buyerAddress,
+        timestamp: timestamp
+      });
+  
+      batch.set(doc(db, 'rewards', `${buyerAddress}_${rewardId}`), {
+        user: buyerAddress,
+        amount: FEEDERS_REWARD,
+        type: 'purchase_reward',
+        referrer: referrerCode,
+        timestamp: timestamp
+      });
+  
+      await batch.commit();
+  
+      // Update UI for current user
+      if (buyerAddress === walletAddress) {
+        await fetchFeedersBalance();
+      } else if (referrerCode === userReferralCode) {
+        await fetchFeedersBalance();
+      }
+  
       toast({
-        message: `Referral bonus: You received ${FEEDERS_REWARD} feeders, and ${referrerCode} received ${FEEDERS_REWARD} feeders!`,
+        message: `Referral rewards distributed! Both users received ${FEEDERS_REWARD} feeders.`,
         type: "success"
       });
-      
+  
     } catch (error) {
-      console.error("Error distributing referral rewards:", error);
+      console.error("Error distributing rewards:", error);
+      toast({
+        message: "Failed to distribute rewards",
+        type: "error"
+      });
     }
   };
-  
+
   // Helper function to update feeders balance
   const updateFeedersBalance = async (userAddress: string, amount: number) => {
+    const batch = writeBatch(db);
     try {
       const balanceDoc = doc(db, 'feeders_balances', userAddress);
       const docSnap = await getDoc(balanceDoc);
       
-      if (docSnap.exists()) {
-        await updateDoc(balanceDoc, {
-          balance: docSnap.data().balance + amount,
-          last_updated: new Date().toISOString()
-        });
-      } else {
-        await setDoc(balanceDoc, {
-          balance: amount,
-          last_updated: new Date().toISOString()
-        });
+      const newBalance = docSnap.exists() ? 
+        docSnap.data().balance + amount : 
+        amount;
+
+      batch.set(balanceDoc, {
+        balance: newBalance,
+        last_updated: new Date().toISOString()
+      }, { merge: true });
+
+      await batch.commit();
+      
+      // If updating current user's balance, refresh the UI
+      if (userAddress === walletAddress) {
+        setFeedersBalance(newBalance);
       }
     } catch (error) {
       console.error("Error updating feeders balance:", error);
+      throw error;
     }
   };
 
@@ -600,13 +687,15 @@ export default function Home() {
   
       // Distribute rewards and refresh data
       if (savedReferrer) {
-        await distributeReferralRewards(savedReferrer, purchaseAmount);
+        await distributeReferralRewards(savedReferrer, walletAddress);
       }
   
+      // Update stats for both user and referrer
       await Promise.all([
-        fetchBalances(),
+        fetchReferralStats(),
+        savedReferrer && updateReferrerStats(savedReferrer),
         fetchLeaderboard(),
-        fetchReferralStats()
+        fetchBalances()
       ]);
   
       setAmount("");
@@ -706,11 +795,15 @@ export default function Home() {
       // Commit all changes
       await batch.commit();
   
-      // Update local state
+      // Update both referrer's and user's stats
+      await Promise.all([
+        fetchReferralStats(), // Update current user's stats
+        savedReferrer && updateReferrerStats(savedReferrer) // Update referrer's stats if exists
+      ]);
+  
       localStorage.setItem('spiderReferrer', referralCode);
       setSavedReferrer(referralCode);
       toast({ message: "Referral code bound successfully!", type: "success" });
-      await fetchReferralStats();
   
     } catch (err) {
       console.error("Error binding referral code:", err);
@@ -823,6 +916,26 @@ export default function Home() {
         message: error.message || "Transaction failed. Please try again.",
         type: "error"
       });
+    }
+  };
+
+  // Add new helper function to update referrer stats
+  const updateReferrerStats = async (referrerCode: string) => {
+    try {
+      const playerDoc = doc(db, 'players', referrerCode);
+      const playerSnap = await getDoc(playerDoc);
+      
+      if (playerSnap.exists()) {
+        const data = playerSnap.data() as PlayerData;
+        // Force a re-render of stats by updating state
+        setReferralStats({
+          invalidInvites: data.invalidInvites?.referrals?.length || 0,
+          validInvites: data.validInvites?.referrals?.length || 0,
+          eligibleInvites: data.eligibleInvites?.referrals?.length || 0
+        });
+      }
+    } catch (error) {
+      console.error("Error updating referrer stats:", error);
     }
   };
 
