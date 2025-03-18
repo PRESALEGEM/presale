@@ -346,26 +346,29 @@ export default function Home() {
       return false;
     }
 
-    // Verify referral code exists in database
+    return true;
+  };
+
+  // Function to create referral record if it doesn't exist
+  const createReferralIfNeeded = async (code: string) => {
     try {
       const referralDoc = doc(db, 'referrals', code);
       const referralSnap = await getDoc(referralDoc);
       
       if (!referralSnap.exists()) {
-        toast({
-          message: "Invalid referral code. Code does not exist.",
-          type: "error"
+        await setDoc(referralDoc, {
+          totalAmount: 0,
+          referralCount: 0,
+          validInvites: 0,
+          eligibleInvites: 0,
+          invalidInvites: 0,
+          lastUpdated: new Date().toISOString()
         });
-        return false;
       }
       
       return true;
     } catch (error) {
-      console.error("Error verifying referral code:", error);
-      toast({
-        message: "Error verifying referral code. Please try again.",
-        type: "error"
-      });
+      console.error("Error creating referral:", error);
       return false;
     }
   };
@@ -638,9 +641,12 @@ export default function Home() {
         return;
       }
   
-      // Verify the referral code
+      // Verify the referral code format
       const isValid = await verifyReferralCode(referralCode);
       if (!isValid) return;
+
+      // Create referral record if it doesn't exist
+      await createReferralIfNeeded(referralCode);
   
       // Record the referral relationship
       await setDoc(doc(db, 'user_referrals', walletAddress), {
