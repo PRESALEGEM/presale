@@ -28,7 +28,8 @@ import {
   orderBy, 
   limit,
   writeBatch,
-  increment
+  increment,
+  runTransaction
 } from 'firebase/firestore';
 
 // Create a simple toast interface for this component
@@ -654,6 +655,24 @@ export default function Home() {
         referrer: referralCode,
         timestamp: new Date().toISOString()
       });
+
+      // Update referrer's stats - increment invalid invites
+      const referrerDoc = doc(db, 'referrals', referralCode);
+      await runTransaction(db, async (transaction) => {
+        const referrerSnap = await transaction.get(referrerDoc);
+        const currentStats = referrerSnap.data() || {
+          totalAmount: 0,
+          referralCount: 0,
+          validInvites: 0,
+          eligibleInvites: 0,
+          invalidInvites: 0
+        };
+        
+        transaction.update(referrerDoc, {
+          invalidInvites: (currentStats.invalidInvites || 0) + 1,
+          lastUpdated: new Date().toISOString()
+        });
+      });
   
       localStorage.setItem('spiderReferrer', referralCode);
       setSavedReferrer(referralCode);
@@ -673,6 +692,49 @@ export default function Home() {
         type: "error"
       });
     }
+  };
+
+  const handlePurchase = async () => {
+    // ...existing code...
+    
+    // After successful purchase, update referral stats if user has a referrer
+    const userRefDoc = doc(db, 'user_referrals', walletAddress);
+    const userRefSnap = await getDoc(userRefDoc);
+    
+    if (userRefSnap.exists()) {
+      const referrerCode = userRefSnap.data().referrer;
+      const referrerDoc = doc(db, 'referrals', referrerCode);
+      
+      await runTransaction(db, async (transaction) => {
+        const referrerSnap = await transaction.get(referrerDoc);
+        const currentStats = referrerSnap.data() || {
+          totalAmount: 0,
+          referralCount: 0,
+          validInvites: 0,
+          eligibleInvites: 0,
+          invalidInvites: 0
+        };
+        
+        // Decrease invalid invites and increase valid invites
+        const updates = {
+          invalidInvites: Math.max(0, (currentStats.invalidInvites || 0) - 1),
+          validInvites: (currentStats.validInvites || 0) + 1,
+          lastUpdated: new Date().toISOString()
+        };
+        
+        // If purchase amount >= 100, increment eligible invites
+        if (amount >= 100) {
+          updates.eligibleInvites = (currentStats.eligibleInvites || 0) + 1;
+        }
+        
+        transaction.update(referrerDoc, updates);
+      });
+      
+      // Distribute referral rewards
+      await distributeReferralRewards(referrerCode, amount);
+    }
+    
+    // ...existing code...
   };
 
   if (error) {
