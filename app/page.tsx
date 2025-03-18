@@ -26,7 +26,9 @@ import {
   query, 
   where, 
   orderBy, 
-  limit 
+  limit,
+  writeBatch,
+  increment
 } from 'firebase/firestore';
 
 // Create a simple toast interface for this component
@@ -488,43 +490,43 @@ export default function Home() {
     setIsLoading(true);
 
     try {
-      // Basic validations
       if (!connected || !walletAddress) {
         throw new Error("Please connect your wallet first.");
       }
 
+      // Validate amount
       if (!amount || parseFloat(amount) <= 0) {
         throw new Error("Please enter a valid amount.");
       }
 
-      // Check if there's a referral code to bind
-      if (referralCode && !savedReferrer) {
-        // Verify the referral code first
-        const isValid = await verifyReferralCode(referralCode);
-        if (!isValid) {
-          throw new Error("Invalid referral code. Please check and try again.");
-        }
-
-        // Bind the referral code first
-        await setDoc(doc(db, 'user_referrals', walletAddress), {
-          user: walletAddress,
-          referrer: referralCode,
-          timestamp: new Date().toISOString()
-        });
-
-        // Save to localStorage
-        localStorage.setItem('spiderReferrer', referralCode);
-        setSavedReferrer(referralCode);
-      }
-
-      // Record the purchase
-      await setDoc(doc(db, 'purchases', `${walletAddress}_${Date.now()}`), {
+      // Create a batch for atomic operations
+      const batch = writeBatch(db);
+      
+      // Prepare purchase document
+      const purchaseRef = doc(db, 'purchases', `${walletAddress}_${Date.now()}`);
+      batch.set(purchaseRef, {
         buyer: walletAddress,
         amount: parseFloat(amount),
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        status: 'pending'
       });
 
-      // Proceed with the transaction
+      // If there's a referral, update referral data
+      if (savedReferrer || referralCode) {
+        const referrerToUse = savedReferrer || referralCode;
+        const referralRef = doc(db, 'referrals', referrerToUse);
+        
+        batch.update(referralRef, {
+          totalAmount: increment(parseFloat(amount)),
+          referralCount: increment(1),
+          lastUpdated: new Date().toISOString()
+        });
+      }
+
+      // Commit the batch
+      await batch.commit();
+
+      // Proceed with transaction
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 600,
         messages: [
