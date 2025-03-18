@@ -4,6 +4,8 @@ import * as React from 'react';
 import * as ToastPrimitives from '@radix-ui/react-toast';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { AlertCircle, CheckCircle, Info } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
@@ -111,6 +113,53 @@ const ToastDescription = React.forwardRef<
   />
 ));
 ToastDescription.displayName = ToastPrimitives.Description.displayName;
+
+interface NewToastProps {
+  message: string;
+  type: 'success' | 'error' | 'info';
+  onClose: () => void;
+}
+
+export const NewToast = ({ message, type, onClose }: NewToastProps) => {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onClose();
+    }, 5000);
+
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  const icons = {
+    success: <CheckCircle className="h-5 w-5" />,
+    error: <AlertCircle className="h-5 w-5" />,
+    info: <Info className="h-5 w-5" />
+  };
+
+  const colors = {
+    success: 'bg-green-500/90',
+    error: 'bg-red-500/90',
+    info: 'bg-blue-500/90'
+  };
+
+  return (
+    <div className={`
+      fixed bottom-4 right-4 z-50
+      flex items-center gap-2 px-4 py-3 rounded-lg
+      text-white shadow-lg backdrop-blur-sm
+      animate-slide-up
+      ${colors[type]}
+    `}>
+      {icons[type]}
+      <p className="text-sm font-medium">{message}</p>
+      <button
+        onClick={onClose}
+        className="ml-4 p-1 hover:bg-white/20 rounded-full transition-colors"
+      >
+        <X className="h-4 w-4" />
+      </button>
+    </div>
+  );
+};
 
 type ToastProps = React.ComponentPropsWithoutRef<typeof Toast>;
 

@@ -31,6 +31,7 @@ import {
   increment,
   runTransaction
 } from 'firebase/firestore';
+import { Toast } from "@/components/ui/toast";
 
 // Create a simple toast interface for this component
 interface ToastProps {
@@ -97,6 +98,20 @@ export default function Home() {
     eligibleInvites: number;
   }>({ invalidInvites: 0, validInvites: 0, eligibleInvites: 0 });
   const [feedersBalance, setFeedersBalance] = useState<number>(0);
+  const [toasts, setToasts] = useState<Array<{
+    id: string;
+    message: string;
+    type: "success" | "error" | "info";
+  }>>([]);
+
+  const showToast = ({ message, type = "info" }: ToastProps) => {
+    const id = Math.random().toString(36).substr(2, 9);
+    setToasts((prev) => [...prev, { id, message, type }]);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  };
 
   const contractAddress = "EQBUMjg7ROfjh_ou3Lz1lpNrTJN59h2S-Wm-ZPsWWVzn-xc9";
   const receiverAddress = "UQAVhdnM_-BLbS6W4b1BF5UyGWuIapjXRZjNJjfve7StCqST";
@@ -426,7 +441,7 @@ export default function Home() {
   const verifyReferralCode = async (code: string) => {
     // Prevent self-referral
     if (code === userReferralCode) {
-      toast({
+      showToast({
         message: "You cannot use your own referral code",
         type: "error"
       });
@@ -435,7 +450,7 @@ export default function Home() {
 
     // Check format: 8 characters long
     if (code.length !== 8) {
-      toast({
+      showToast({
         message: "Invalid referral code format. Must be 8 characters long.",
         type: "error"
       });
@@ -577,14 +592,14 @@ export default function Home() {
         await fetchFeedersBalance();
       }
   
-      toast({
+      showToast({
         message: `Referral rewards distributed! Both users received ${FEEDERS_REWARD} feeders.`,
         type: "success"
       });
   
     } catch (error) {
       console.error("Error distributing rewards:", error);
-      toast({
+      showToast({
         message: "Failed to distribute rewards",
         type: "error"
       });
@@ -699,11 +714,11 @@ export default function Home() {
       ]);
   
       setAmount("");
-      toast({ message: "Purchase successful!", type: "success" });
+      showToast({ message: "Purchase successful!", type: "success" });
   
     } catch (error: any) {
       console.error("Transaction error:", error);
-      toast({ message: error.message || "Transaction failed", type: "error" });
+      showToast({ message: error.message || "Transaction failed", type: "error" });
     } finally {
       setIsLoading(false);
     }
@@ -712,7 +727,7 @@ export default function Home() {
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      toast({
+      showToast({
         message: "Referral code copied to clipboard!",
         type: "success"
       });
@@ -724,12 +739,12 @@ export default function Home() {
       textArea.select();
       try {
         document.execCommand('copy');
-        toast({
+        showToast({
           message: "Referral code copied to clipboard!",
           type: "success"
         });
       } catch (err) {
-        toast({
+        showToast({
           message: "Failed to copy code. Please try manually copying.",
           type: "error"
         });
@@ -739,7 +754,13 @@ export default function Home() {
   };
 
   const handleBindReferralCode = async () => {
-    if (!referralCode || !connected || !walletAddress) return;
+    if (!referralCode || !connected || !walletAddress) {
+      showToast({ 
+        message: "Please connect your wallet and enter a referral code",
+        type: "error"
+      });
+      return;
+    }
     
     try {
       // First perform all reads
@@ -749,7 +770,7 @@ export default function Home() {
       ]);
   
       if (userRefDoc.exists()) {
-        toast({ message: "Already have a referrer", type: "error" });
+        showToast({ message: "Already have a referrer", type: "error" });
         return;
       }
   
@@ -803,17 +824,17 @@ export default function Home() {
   
       localStorage.setItem('spiderReferrer', referralCode);
       setSavedReferrer(referralCode);
-      toast({ message: "Referral code bound successfully!", type: "success" });
+      showToast({ message: "Referral code bound successfully!", type: "success" });
   
     } catch (err) {
       console.error("Error binding referral code:", err);
-      toast({ message: "Failed to bind referral code", type: "error" });
+      showToast({ message: "Failed to bind referral code", type: "error" });
     }
   };
 
   const handlePurchase = async () => {
     if (!connected || !walletAddress) {
-      toast({
+      showToast({
         message: "Please connect your wallet first",
         type: "error"
       });
@@ -905,14 +926,14 @@ export default function Home() {
       ]);
   
       setAmount("");
-      toast({
+      showToast({
         message: "Purchase successful!",
         type: "success"
       });
   
     } catch (error: any) {
       console.error("Transaction error:", error);
-      toast({
+      showToast({
         message: error.message || "Transaction failed. Please try again.",
         type: "error"
       });
@@ -1111,7 +1132,7 @@ export default function Home() {
                             document.body.removeChild(textArea);
                             
                             if (successful) {
-                              toast({
+                              showToast({
                                 message: "Referral code copied to clipboard!",
                                 type: "success"
                               });
@@ -1120,7 +1141,7 @@ export default function Home() {
                             }
                           } catch (err) {
                             console.error('Failed to copy text: ', err);
-                            toast({
+                            showToast({
                               message: "Failed to copy text. Please try again.",
                               type: "error"
                             });
@@ -1343,6 +1364,16 @@ export default function Home() {
             </Card>
           </TabsContent>
         </Tabs>
+      </div>
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+        {toasts.map(({ id, message, type }) => (
+          <Toast
+            key={id}
+            message={message}
+            type={type}
+            onClose={() => removeToast(id)}
+          />
+        ))}
       </div>
     </main>
   );
