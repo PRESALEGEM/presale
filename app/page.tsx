@@ -634,11 +634,29 @@ export default function Home() {
         const playerData = playerSnap.exists() ? playerSnap.data() as PlayerData : null;
   
         if (playerData) {
-          const updates: Partial<PlayerData> = {
+          const updates: {
+            totalInvites: number;
+            validInvites: {
+              total: number;
+              referrals: string[];
+            };
+            eligibleInvites: {
+              total: number;
+              referrals: string[];
+            };
+            invalidInvites?: {
+              total: number;
+              referrals: string[];
+            };
+          } = {
             totalInvites: (playerData.totalInvites || 0) + 1,
             validInvites: {
               total: (playerData.validInvites?.total || 0) + 1,
               referrals: [...(playerData.validInvites?.referrals || []), walletAddress]
+            },
+            eligibleInvites: {
+              total: 0,
+              referrals: []
             }
           };
   
@@ -872,6 +890,10 @@ export default function Home() {
           validInvites: {
             total: (playerData.validInvites?.total || 0) + 1,
             referrals: [...(playerData.validInvites?.referrals || []), walletAddress]
+          },
+          eligibleInvites: {
+            total: (playerData.eligibleInvites?.total || 0),
+            referrals: [...(playerData.eligibleInvites?.referrals || [])]
           }
         };
 
