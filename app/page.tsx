@@ -120,14 +120,6 @@ export default function Home() {
     type: "success" | "error" | "info";
   }>>([]);
 
-  const showToast = ({ message, type = "info" }: ToastProps) => {
-    toast({
-      title: type.charAt(0).toUpperCase() + type.slice(1),
-      description: message,
-      variant: type === "error" ? "destructive" : "default",
-    })
-  };
-
   const removeToast = (id: string) => {
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
   };
