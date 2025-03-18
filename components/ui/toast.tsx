@@ -114,13 +114,13 @@ const ToastDescription = React.forwardRef<
 ));
 ToastDescription.displayName = ToastPrimitives.Description.displayName;
 
-interface NewToastProps {
+interface ToastProps {
   message: string;
   type: 'success' | 'error' | 'info';
   onClose: () => void;
 }
 
-export const NewToast = ({ message, type, onClose }: NewToastProps) => {
+export const Toast = ({ message, type, onClose }: ToastProps) => {
   useEffect(() => {
     const timer = setTimeout(() => {
       onClose();
@@ -136,24 +136,29 @@ export const NewToast = ({ message, type, onClose }: NewToastProps) => {
   };
 
   const colors = {
-    success: 'bg-green-500/90',
-    error: 'bg-red-500/90',
-    info: 'bg-blue-500/90'
+    success: 'bg-green-500 border-green-600',
+    error: 'bg-red-500 border-red-600',
+    info: 'bg-blue-500 border-blue-600'
   };
 
   return (
-    <div className={`
-      fixed bottom-4 right-4 z-50
-      flex items-center gap-2 px-4 py-3 rounded-lg
-      text-white shadow-lg backdrop-blur-sm
-      animate-slide-up
-      ${colors[type]}
-    `}>
-      {icons[type]}
-      <p className="text-sm font-medium">{message}</p>
+    <div 
+      className={`
+        flex items-center gap-3 min-w-[300px] px-4 py-3 
+        ${colors[type]} border rounded-lg shadow-lg 
+        backdrop-blur-md text-white
+        transform transition-all duration-300 ease-in-out
+        hover:scale-102 hover:shadow-xl
+      `}
+    >
+      <div className="shrink-0">
+        {icons[type]}
+      </div>
+      <p className="flex-1 text-sm font-medium pr-2">{message}</p>
       <button
         onClick={onClose}
-        className="ml-4 p-1 hover:bg-white/20 rounded-full transition-colors"
+        className="p-1 rounded-full hover:bg-white/20 transition-colors"
+        aria-label="Close notification"
       >
         <X className="h-4 w-4" />
       </button>
@@ -161,12 +166,12 @@ export const NewToast = ({ message, type, onClose }: NewToastProps) => {
   );
 };
 
-type ToastProps = React.ComponentPropsWithoutRef<typeof Toast>;
+type ToastPropsType = React.ComponentPropsWithoutRef<typeof Toast>;
 
 type ToastActionElement = React.ReactElement<typeof ToastAction>;
 
 export {
-  type ToastProps,
+  type ToastPropsType,
   type ToastActionElement,
   ToastProvider,
   ToastViewport,

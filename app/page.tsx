@@ -1365,14 +1365,16 @@ export default function Home() {
           </TabsContent>
         </Tabs>
       </div>
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+      {/* Update the toast container */}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col-reverse gap-3">
         {toasts.map(({ id, message, type }) => (
-          <Toast
-            key={id}
-            message={message}
-            type={type}
-            onClose={() => removeToast(id)}
-          />
+          <div key={id} className="toast-enter">
+            <Toast
+              message={message}
+              type={type}
+              onClose={() => removeToast(id)}
+            />
+          </div>
         ))}
       </div>
     </main>
