@@ -819,71 +819,82 @@ export default function Home() {
         throw new Error("Please enter a valid amount.");
       }
   
-      // First perform all reads
-      const playerDoc = savedReferrer ? 
-        await getDoc(doc(db, 'players', savedReferrer)) : null;
-  
-      // Perform the transaction
-      await runTransaction(db, async (transaction) => {
-        // Create purchase record
-        const purchaseRef = doc(db, 'purchases', `${walletAddress}_${Date.now()}`);
-        transaction.set(purchaseRef, {
-          buyer: walletAddress,
-          amount: purchaseAmount,
-          timestamp: new Date().toISOString(),
-          status: 'pending',
-          referrer: savedReferrer
+      const batch = writeBatch(db);
+
+      // First check and create necessary data structures
+      const [playerDoc, balanceDoc] = await Promise.all([
+        savedReferrer ? getDoc(doc(db, 'players', savedReferrer)) : null,
+        getDoc(doc(db, 'feeders_balances', walletAddress))
+      ]);
+
+      // Create initial data structures if they don't exist
+      if (savedReferrer && !playerDoc?.exists()) {
+        batch.set(doc(db, 'players', savedReferrer), {
+          walletAddress: savedReferrer,
+          feeders: 0,
+          totalInvites: 0,
+          eligibleInvites: { total: 0, referrals: [] },
+          validInvites: { total: 0, referrals: [] },
+          invalidInvites: { total: 0, referrals: [] }
         });
-  
-        if (savedReferrer && playerDoc) {
-          const playerRef = doc(db, 'players', savedReferrer);
-          const playerData = playerDoc.exists() ? playerDoc.data() as PlayerData : {
-            walletAddress: '',
-            feeders: 0,
-            totalInvites: 0,
-            eligibleInvites: { total: 0, referrals: [] },
-            validInvites: { total: 0, referrals: [] },
-            invalidInvites: { total: 0, referrals: [] }
-          };
-  
-          // Update stats
-          const updatedData: Partial<PlayerData> = {
-            totalInvites: (playerData.totalInvites || 0) + 1,
-            validInvites: {
-              total: (playerData.validInvites?.total || 0) + 1,
-              referrals: [...(playerData.validInvites?.referrals || []), walletAddress]
-            }
-          };
-  
-          // If purchase amount >= 100, update eligible invites
-          if (purchaseAmount >= 100) {
-            updatedData.eligibleInvites = {
-              total: (playerData.eligibleInvites?.total || 0) + 1,
-              referrals: [...(playerData.eligibleInvites?.referrals || []), walletAddress]
-            };
-          }
-  
-          // Remove from invalid invites if present
-          if (playerData.invalidInvites?.referrals?.includes(walletAddress)) {
-            updatedData.invalidInvites = {
-              total: Math.max(0, (playerData.invalidInvites.total || 1) - 1),
-              referrals: playerData.invalidInvites.referrals.filter(r => r !== walletAddress)
-            };
-          }
-  
-          transaction.set(playerRef, updatedData, { merge: true });
-        }
+      }
+
+      if (!balanceDoc.exists()) {
+        batch.set(doc(db, 'feeders_balances', walletAddress), {
+          balance: 0,
+          last_updated: new Date().toISOString()
+        });
+      }
+
+      // Create purchase record
+      const purchaseRef = doc(db, 'purchases', `${walletAddress}_${Date.now()}`);
+      batch.set(purchaseRef, {
+        buyer: walletAddress,
+        amount: purchaseAmount,
+        timestamp: new Date().toISOString(),
+        status: 'pending',
+        referrer: savedReferrer
       });
-  
-      // Proceed with blockchain transaction
+
+      // Update player stats if there's a referrer
+      if (savedReferrer && playerDoc) {
+        const playerData = playerDoc.exists() ? playerDoc.data() as PlayerData : {
+          walletAddress: savedReferrer,
+          feeders: 0,
+          totalInvites: 0,
+          eligibleInvites: { total: 0, referrals: [] },
+          validInvites: { total: 0, referrals: [] },
+          invalidInvites: { total: 0, referrals: [] }
+        };
+
+        const updates = {
+          totalInvites: (playerData.totalInvites || 0) + 1,
+          validInvites: {
+            total: (playerData.validInvites?.total || 0) + 1,
+            referrals: [...(playerData.validInvites?.referrals || []), walletAddress]
+          }
+        };
+
+        if (purchaseAmount >= 100) {
+          updates.eligibleInvites = {
+            total: (playerData.eligibleInvites?.total || 0) + 1,
+            referrals: [...(playerData.eligibleInvites?.referrals || []), walletAddress]
+          };
+        }
+
+        batch.set(doc(db, 'players', savedReferrer), updates, { merge: true });
+      }
+
+      // Commit the batch before proceeding with blockchain transaction
+      await batch.commit();
+
+      // Process blockchain transaction
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 600,
-        messages: [
-          {
-            address: receiverAddress,
-            amount: (purchaseAmount * 1e9).toString(),
-          }
-        ]
+        messages: [{
+          address: receiverAddress,
+          amount: (purchaseAmount * 1e9).toString()
+        }]
       });
   
       if (savedReferrer) {
