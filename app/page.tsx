@@ -131,87 +131,66 @@ export default function Home() {
   useEffect(() => {
     const checkConnection = async () => {
       try {
-        const isConnected = tonConnectUI.connected;
-        setConnected(isConnected);
-        
-        if (isConnected && tonConnectUI.wallet) {
-          const walletInfo = tonConnectUI.wallet;
-          const walletAddress = walletInfo.account.address;
+        const wallet = await tonConnectUI.getWalletInfo();
+        if (wallet) {
+          const walletAddress = wallet.account.address;
           const referralCode = walletAddress.slice(0, 8);
+          setConnected(true);
           setWalletAddress(walletAddress);
           setUserReferralCode(referralCode);
 
-          // Initialize all user data in Firestore
-          try {
-            const batch = writeBatch(db);
+          const batch = writeBatch(db);
 
-            // 1. Initialize user document
-            const userDoc = doc(db, 'users', walletAddress);
-            const userSnap = await getDoc(userDoc);
-            if (!userSnap.exists()) {
-              batch.set(userDoc, {
-                address: walletAddress,
-                referralCode: referralCode,
-                createdAt: new Date().toISOString(),
-                totalPurchases: 0,
-                lastActive: new Date().toISOString()
-              });
-            } else {
-              batch.update(userDoc, {
-                lastActive: new Date().toISOString()
-              });
-            }
-
-            // 2. Initialize player document
-            const playerDoc = doc(db, 'players', referralCode);
-            const playerSnap = await getDoc(playerDoc);
-            if (!playerSnap.exists()) {
-              batch.set(playerDoc, {
-                walletAddress: walletAddress,
-                feeders: 0,
-                totalInvites: 0,
-                eligibleInvites: { total: 0, referrals: [] },
-                validInvites: { total: 0, referrals: [] },
-                invalidInvites: { total: 0, referrals: [] }
-              });
-            }
-
-            // 3. Initialize referrals document
-            const referralDoc = doc(db, 'referrals', referralCode);
-            const referralSnap = await getDoc(referralDoc);
-            if (!referralSnap.exists()) {
-              batch.set(referralDoc, {
-                totalAmount: 0,
-                referralCount: 0,
-                validInvites: 0,
-                eligibleInvites: 0,
-                invalidInvites: 0,
-                lastUpdated: new Date().toISOString()
-              });
-            }
-
-            // 4. Initialize feeders balance
-            const balanceDoc = doc(db, 'feeders_balances', walletAddress);
-            const balanceSnap = await getDoc(balanceDoc);
-            if (!balanceSnap.exists()) {
-              batch.set(balanceDoc, {
-                balance: 0,
-                last_updated: new Date().toISOString()
-              });
-            }
-
-            // Commit all changes
-            await batch.commit();
-
-            // Fetch initial stats
-            await Promise.all([
-              fetchReferralStats(),
-              fetchFeedersBalance()
-            ]);
-
-          } catch (err) {
-            console.error("Error initializing user data:", err);
+          // Initialize user document
+          const userDoc = doc(db, 'users', walletAddress);
+          const userSnap = await getDoc(userDoc);
+          if (!userSnap.exists()) {
+            batch.set(userDoc, {
+              address: walletAddress,
+              referralCode: referralCode,
+              createdAt: new Date().toISOString(),
+              totalPurchases: 0,
+              lastActive: new Date().toISOString()
+            });
+          } else {
+            batch.update(userDoc, {
+              lastActive: new Date().toISOString()
+            });
           }
+
+          // Initialize player document
+          const playerDoc = doc(db, 'players', referralCode);
+          const playerSnap = await getDoc(playerDoc);
+          if (!playerSnap.exists()) {
+            batch.set(playerDoc, {
+              walletAddress: walletAddress,
+              totalInvites: 0,
+              validInvites: {
+                total: 0,
+                referrals: []
+              },
+              eligibleInvites: {
+                total: 0,
+                referrals: []
+              },
+              invalidInvites: {
+                total: 0,
+                referrals: []
+              },
+              feeders: 0,
+              createdAt: new Date().toISOString(),
+              lastUpdated: new Date().toISOString()
+            });
+          }
+
+          await batch.commit();
+          
+          // Fetch initial stats after initialization
+          await Promise.all([
+            fetchReferralStats(),
+            fetchFeedersBalance(),
+            fetchLeaderboard()
+          ]);
         } else {
           setWalletAddress(null);
           setUserReferralCode("");
@@ -333,50 +312,26 @@ export default function Home() {
   const fetchLeaderboard = async () => {
     setIsFetchingLeaderboard(true);
     try {
-      // Get all players first
       const playersRef = collection(db, 'players');
       const playersSnap = await getDocs(playersRef);
-      const playersData = new Map<string, PlayerData>();
       
-      // Create map of player data
-      playersSnap.docs.forEach(doc => {
-        playersData.set(doc.id, doc.data() as PlayerData);
-      });
-
-      // Get purchases data
-      const purchasesRef = collection(db, 'purchases');
-      const purchasesSnap = await getDocs(purchasesRef);
-      const purchasesByReferrer = new Map<string, number>();
-
-      // Calculate total amounts and valid purchases
-      purchasesSnap.docs.forEach(doc => {
-        const purchase = doc.data();
-        if (purchase.referrer && purchase.amount) {
-          const currentAmount = purchasesByReferrer.get(purchase.referrer) || 0;
-          purchasesByReferrer.set(purchase.referrer, currentAmount + purchase.amount);
-        }
-      });
-
-      // Combine data and create leaderboard
-      const leaderboardData = Array.from(playersData.entries())
-        .map(([id, data]) => ({
-          referrer: id,
-          totalAmount: purchasesByReferrer.get(id) || 0,
-          validInvites: data.validInvites?.referrals?.length || 0,
-          eligibleInvites: data.eligibleInvites?.referrals?.length || 0,
-          referralCount: data.invalidInvites?.referrals?.length || 0
-        }))
-        // Filter out players with no valid invites
-        .filter(player => player.validInvites > 0)
-        // Sort first by total amount, then by eligible invites, then by valid invites
+      const leaderboardData = playersSnap.docs
+        .map(doc => {
+          const data = doc.data() as PlayerData;
+          return {
+            referrer: doc.id,
+            totalAmount: 0, // Will be updated from purchases
+            validInvites: data.validInvites?.total || 0,
+            eligibleInvites: data.eligibleInvites?.total || 0,
+            referralCount: (data.validInvites?.total || 0) + (data.eligibleInvites?.total || 0)
+          };
+        })
+        .filter(player => player.referralCount > 0)
         .sort((a, b) => {
-          if (b.totalAmount !== a.totalAmount) {
-            return b.totalAmount - a.totalAmount;
+          if (b.referralCount !== a.referralCount) {
+            return b.referralCount - a.referralCount;
           }
-          if (b.eligibleInvites !== a.eligibleInvites) {
-            return b.eligibleInvites - a.eligibleInvites;
-          }
-          return b.validInvites - a.validInvites;
+          return b.eligibleInvites - a.eligibleInvites;
         })
         .slice(0, 10);
 
