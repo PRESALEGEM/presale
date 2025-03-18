@@ -111,60 +111,36 @@ export default function Home() {
         if (isConnected && tonConnectUI.wallet) {
           const walletInfo = tonConnectUI.wallet;
           const walletAddress = walletInfo.account.address;
+          const referralCode = walletAddress.slice(0, 8);
           setWalletAddress(walletAddress);
-          setUserReferralCode(walletAddress.slice(0, 8));
+          setUserReferralCode(referralCode);
 
-          // Initialize user data in Firestore
+          // Initialize all user data in Firestore
           try {
+            const batch = writeBatch(db);
+
+            // 1. Initialize user document
             const userDoc = doc(db, 'users', walletAddress);
             const userSnap = await getDoc(userDoc);
-
             if (!userSnap.exists()) {
-              await setDoc(userDoc, {
+              batch.set(userDoc, {
                 address: walletAddress,
-                referralCode: walletAddress.slice(0, 8),
+                referralCode: referralCode,
                 createdAt: new Date().toISOString(),
                 totalPurchases: 0,
                 lastActive: new Date().toISOString()
               });
-
-              // Initialize referrals document
-              const referralDoc = doc(db, 'referrals', walletAddress.slice(0, 8));
-              const referralSnap = await getDoc(referralDoc);
-
-              if (!referralSnap.exists()) {
-                await setDoc(referralDoc, {
-                  totalAmount: 0,
-                  referralCount: 0,
-                  validInvites: 0,
-                  eligibleInvites: 0,
-                  invalidInvites: 0,
-                  lastUpdated: new Date().toISOString()
-                });
-              }
-
-              // Initialize feeders balance
-              const balanceDoc = doc(db, 'feeders_balances', walletAddress);
-              const balanceSnap = await getDoc(balanceDoc);
-
-              if (!balanceSnap.exists()) {
-                await setDoc(balanceDoc, {
-                  balance: 0,
-                  last_updated: new Date().toISOString()
-                });
-              }
             } else {
-              // Update last active timestamp
-              await updateDoc(userDoc, {
+              batch.update(userDoc, {
                 lastActive: new Date().toISOString()
               });
             }
 
-            const playerDoc = doc(db, 'players', walletAddress.slice(0, 8));
+            // 2. Initialize player document
+            const playerDoc = doc(db, 'players', referralCode);
             const playerSnap = await getDoc(playerDoc);
-
             if (!playerSnap.exists()) {
-              await setDoc(playerDoc, {
+              batch.set(playerDoc, {
                 walletAddress: walletAddress,
                 feeders: 0,
                 totalInvites: 0,
@@ -173,6 +149,40 @@ export default function Home() {
                 invalidInvites: { total: 0, referrals: [] }
               });
             }
+
+            // 3. Initialize referrals document
+            const referralDoc = doc(db, 'referrals', referralCode);
+            const referralSnap = await getDoc(referralDoc);
+            if (!referralSnap.exists()) {
+              batch.set(referralDoc, {
+                totalAmount: 0,
+                referralCount: 0,
+                validInvites: 0,
+                eligibleInvites: 0,
+                invalidInvites: 0,
+                lastUpdated: new Date().toISOString()
+              });
+            }
+
+            // 4. Initialize feeders balance
+            const balanceDoc = doc(db, 'feeders_balances', walletAddress);
+            const balanceSnap = await getDoc(balanceDoc);
+            if (!balanceSnap.exists()) {
+              batch.set(balanceDoc, {
+                balance: 0,
+                last_updated: new Date().toISOString()
+              });
+            }
+
+            // Commit all changes
+            await batch.commit();
+
+            // Fetch initial stats
+            await Promise.all([
+              fetchReferralStats(),
+              fetchFeedersBalance()
+            ]);
+
           } catch (err) {
             console.error("Error initializing user data:", err);
           }
@@ -524,79 +534,87 @@ export default function Home() {
 
   // Update the existing handleBuy function to track purchases
   const handleBuy = async () => {
-    setError(null);
+    if (!connected || !walletAddress) return;
     setIsLoading(true);
-
+  
     try {
-      if (!connected || !walletAddress) {
-        throw new Error("Please connect your wallet first.");
-      }
-
-      // Validate amount
-      if (!amount || parseFloat(amount) <= 0) {
-        throw new Error("Please enter a valid amount.");
-      }
-
-      // Use transaction instead of batch for atomicity
-      await runTransaction(db, async (transaction) => {
-        // Create purchase record
-        const purchaseRef = doc(db, 'purchases', `${walletAddress}_${Date.now()}`);
-        transaction.set(purchaseRef, {
-          buyer: walletAddress,
-          amount: parseFloat(amount),
-          timestamp: new Date().toISOString(),
-          status: 'pending',
-          referrer: savedReferrer || null // Track referrer in purchase
-        });
-
-        // Update referral stats if there's a referrer
-        if (savedReferrer) {
-          const referrerDoc = doc(db, 'referrals', savedReferrer);
-          const referrerSnap = await transaction.get(referrerDoc);
-
-          if (referrerSnap.exists()) {
-            const currentStats = referrerSnap.data();
-            transaction.update(referrerDoc, {
-              totalAmount: (currentStats.totalAmount || 0) + parseFloat(amount),
-              validInvites: (currentStats.validInvites || 0) + 1,
-              eligibleInvites: (currentStats.eligibleInvites || 0) + (parseFloat(amount) >= 100 ? 1 : 0),
-              lastUpdated: new Date().toISOString()
-            });
-          }
-        }
+      const purchaseAmount = parseFloat(amount);
+      if (!purchaseAmount || purchaseAmount <= 0) throw new Error("Invalid amount");
+  
+      const batch = writeBatch(db);
+  
+      // 1. Create purchase record
+      const purchaseRef = doc(db, 'purchases', `${walletAddress}_${Date.now()}`);
+      batch.set(purchaseRef, {
+        buyer: walletAddress,
+        amount: purchaseAmount,
+        timestamp: new Date().toISOString(),
+        status: 'pending',
+        referrer: savedReferrer
       });
-
-      // Proceed with blockchain transaction
+  
+      // 2. Update player stats if there's a referrer
+      if (savedReferrer) {
+        const playerRef = doc(db, 'players', savedReferrer);
+        const playerSnap = await getDoc(playerRef);
+        const playerData = playerSnap.exists() ? playerSnap.data() as PlayerData : null;
+  
+        if (playerData) {
+          const updates: Partial<PlayerData> = {
+            totalInvites: (playerData.totalInvites || 0) + 1,
+            validInvites: {
+              total: (playerData.validInvites?.total || 0) + 1,
+              referrals: [...(playerData.validInvites?.referrals || []), walletAddress]
+            }
+          };
+  
+          if (purchaseAmount >= 100) {
+            updates.eligibleInvites = {
+              total: (playerData.eligibleInvites?.total || 0) + 1,
+              referrals: [...(playerData.eligibleInvites?.referrals || []), walletAddress]
+            };
+          }
+  
+          if (playerData.invalidInvites?.referrals?.includes(walletAddress)) {
+            updates.invalidInvites = {
+              total: Math.max(0, (playerData.invalidInvites.total || 1) - 1),
+              referrals: playerData.invalidInvites.referrals.filter(r => r !== walletAddress)
+            };
+          }
+  
+          batch.set(playerRef, updates, { merge: true });
+        }
+      }
+  
+      // Commit database changes
+      await batch.commit();
+  
+      // Process blockchain transaction
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 600,
-        messages: [
-          {
-            address: receiverAddress,
-            amount: (parseFloat(amount) * 1e9).toString(),
-          }
-        ]
+        messages: [{
+          address: receiverAddress,
+          amount: (purchaseAmount * 1e9).toString()
+        }]
       });
-
-      // Refresh all data after successful transaction
+  
+      // Distribute rewards and refresh data
+      if (savedReferrer) {
+        await distributeReferralRewards(savedReferrer, purchaseAmount);
+      }
+  
       await Promise.all([
         fetchBalances(),
         fetchLeaderboard(),
         fetchReferralStats()
       ]);
-
-      // Clear form
+  
       setAmount("");
-      toast({
-        message: "Purchase successful!",
-        type: "success"
-      });
-
+      toast({ message: "Purchase successful!", type: "success" });
+  
     } catch (error: any) {
       console.error("Transaction error:", error);
-      toast({
-        message: error.message || "Transaction failed. Please try again.",
-        type: "error"
-      });
+      toast({ message: error.message || "Transaction failed", type: "error" });
     } finally {
       setIsLoading(false);
     }
@@ -632,14 +650,8 @@ export default function Home() {
   };
 
   const handleBindReferralCode = async () => {
-    if (!referralCode || !connected || !walletAddress) {
-      toast({
-        message: "Please connect your wallet and enter a referral code",
-        type: "error"
-      });
-      return;
-    }
-  
+    if (!referralCode || !connected || !walletAddress) return;
+    
     try {
       // First perform all reads
       const [userRefDoc, playerDoc] = await Promise.all([
@@ -647,66 +659,62 @@ export default function Home() {
         getDoc(doc(db, 'players', referralCode))
       ]);
   
-      // Check existing referrer
       if (userRefDoc.exists()) {
-        toast({
-          message: "You already have a referrer bound",
-          type: "error"
-        });
+        toast({ message: "Already have a referrer", type: "error" });
         return;
       }
   
-      // Verify referral code
-      const isValid = await verifyReferralCode(referralCode);
-      if (!isValid) return;
+      // Create initial batch for atomic writes
+      const batch = writeBatch(db);
   
-      // Now perform the writes in a transaction
-      await runTransaction(db, async (transaction) => {
-        // Create or update player document
-        const playerRef = doc(db, 'players', referralCode);
-        const playerData = playerDoc.exists() ? playerDoc.data() as PlayerData : {
-          walletAddress: '',
-          feeders: 0,
-          totalInvites: 0,
-          eligibleInvites: { total: 0, referrals: [] },
-          validInvites: { total: 0, referrals: [] },
-          invalidInvites: { total: 0, referrals: [] }
-        };
+      // 1. Create/Update player document for referrer
+      const playerRef = doc(db, 'players', referralCode);
+      const playerData = playerDoc.exists() ? playerDoc.data() as PlayerData : {
+        walletAddress: '',
+        feeders: 0,
+        totalInvites: 0,
+        eligibleInvites: { total: 0, referrals: [] },
+        validInvites: { total: 0, referrals: [] },
+        invalidInvites: { total: 0, referrals: [] }
+      };
   
-        // Update invalid invites
-        const updatedInvalidInvites: InviteData = {
+      batch.set(playerRef, {
+        ...playerData,
+        invalidInvites: {
           total: (playerData.invalidInvites?.total || 0) + 1,
           referrals: [...(playerData.invalidInvites?.referrals || []), walletAddress]
-        };
+        }
+      }, { merge: true });
   
-        transaction.set(playerRef, {
-          ...playerData,
-          invalidInvites: updatedInvalidInvites
-        }, { merge: true });
-  
-        // Record referral relationship
-        transaction.set(doc(db, 'user_referrals', walletAddress), {
-          user: walletAddress,
-          referrer: referralCode,
-          timestamp: new Date().toISOString()
-        });
+      // 2. Record referral relationship
+      batch.set(doc(db, 'user_referrals', walletAddress), {
+        user: walletAddress,
+        referrer: referralCode,
+        timestamp: new Date().toISOString()
       });
   
+      // 3. Create feeders balance doc if needed
+      const balanceDoc = doc(db, 'feeders_balances', walletAddress);
+      const balanceSnap = await getDoc(balanceDoc);
+      if (!balanceSnap.exists()) {
+        batch.set(balanceDoc, {
+          balance: 0,
+          last_updated: new Date().toISOString()
+        });
+      }
+  
+      // Commit all changes
+      await batch.commit();
+  
+      // Update local state
       localStorage.setItem('spiderReferrer', referralCode);
       setSavedReferrer(referralCode);
-      
-      toast({
-        message: "Referral code bound successfully!",
-        type: "success"
-      });
-  
+      toast({ message: "Referral code bound successfully!", type: "success" });
       await fetchReferralStats();
+  
     } catch (err) {
       console.error("Error binding referral code:", err);
-      toast({
-        message: "Failed to bind referral code. Please try again",
-        type: "error"
-      });
+      toast({ message: "Failed to bind referral code", type: "error" });
     }
   };
 
