@@ -32,6 +32,7 @@ import {
   runTransaction
 } from 'firebase/firestore';
 import { Toast } from "@/components/ui/toast";
+import { useToast } from "@/hooks/use-toast"
 
 // Create a simple toast interface for this component
 interface ToastProps {
@@ -78,6 +79,21 @@ interface PlayerData {
 }
 
 export default function Home() {
+  const { toast } = useToast()
+  
+  // Remove the old toast state and handlers
+  // ...existing code...
+  
+  // Replace showToast with this implementation
+  const showToast = ({ message, type = "info" }: ToastProps) => {
+    toast({
+      title: type.charAt(0).toUpperCase() + type.slice(1),
+      description: message,
+      variant: type === "error" ? "destructive" : "default",
+    })
+  };
+  
+  // Remove removeToast as it's no longer needed
   const [tonConnectUI] = useTonConnectUI();
   const [connected, setConnected] = useState(false);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
@@ -105,8 +121,11 @@ export default function Home() {
   }>>([]);
 
   const showToast = ({ message, type = "info" }: ToastProps) => {
-    const id = Math.random().toString(36).substr(2, 9);
-    setToasts((prev) => [...prev, { id, message, type }]);
+    toast({
+      title: type.charAt(0).toUpperCase() + type.slice(1),
+      description: message,
+      variant: type === "error" ? "destructive" : "default",
+    })
   };
 
   const removeToast = (id: string) => {
