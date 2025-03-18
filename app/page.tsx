@@ -378,7 +378,7 @@ export default function Home() {
     }
   };
 
-  // Keep only one fetchReferralStats function and remove the other one
+  // Combine all referral stats functionality into one function
   const fetchReferralStats = async () => {
     if (!connected || !userReferralCode) return;
     
@@ -388,15 +388,20 @@ export default function Home() {
       
       if (playerSnap.exists()) {
         const data = playerSnap.data() as PlayerData;
-        // Update the stats from the actual invite lists
+        
+        // Get unique referrals counting
+        const invalidInvites = new Set(data.invalidInvites?.referrals || []);
+        const validInvites = new Set(data.validInvites?.referrals || []);
+        const eligibleInvites = new Set(data.eligibleInvites?.referrals || []);
+
         setReferralStats({
-          invalidInvites: data.invalidInvites?.referrals?.length || 0,
-          validInvites: data.validInvites?.referrals?.length || 0,
-          eligibleInvites: data.eligibleInvites?.referrals?.length || 0
+          invalidInvites: invalidInvites.size,
+          validInvites: validInvites.size,
+          eligibleInvites: eligibleInvites.size
         });
         setFeedersBalance(data.feeders || 0);
       } else {
-        // Initialize player document if it doesn't exist
+        // Initialize if doesn't exist
         const initialData = {
           walletAddress: walletAddress,
           feeders: 0,
@@ -406,6 +411,7 @@ export default function Home() {
           invalidInvites: { total: 0, referrals: [] }
         };
         await setDoc(playerDoc, initialData);
+        
         setReferralStats({
           invalidInvites: 0,
           validInvites: 0,
@@ -415,43 +421,6 @@ export default function Home() {
       }
     } catch (error) {
       console.error("Error fetching referral stats:", error);
-    }
-  };
-
-  // Rename this function to updateUserReferralStats to avoid duplication
-  const updateUserReferralStats = async () => {
-    if (!connected || !userReferralCode) return;
-    
-    try {
-      const playerDoc = doc(db, 'players', userReferralCode);
-      const playerSnap = await getDoc(playerDoc);
-      
-      if (playerSnap.exists()) {
-        const data = playerSnap.data() as PlayerData;
-        setReferralStats({
-          invalidInvites: data.invalidInvites?.referrals?.length || 0,
-          validInvites: data.validInvites?.referrals?.length || 0,
-          eligibleInvites: data.eligibleInvites?.referrals?.length || 0
-        });
-        setFeedersBalance(data.feeders || 0);
-      } else {
-        await setDoc(playerDoc, {
-          walletAddress: walletAddress,
-          feeders: 0,
-          totalInvites: 0,
-          eligibleInvites: { total: 0, referrals: [] },
-          validInvites: { total: 0, referrals: [] },
-          invalidInvites: { total: 0, referrals: [] }
-        });
-        setReferralStats({
-          invalidInvites: 0,
-          validInvites: 0,
-          eligibleInvites: 0
-        });
-        setFeedersBalance(0);
-      }
-    } catch (error) {
-      console.error("Error updating user referral stats:", error);
     }
   };
 
@@ -513,51 +482,6 @@ export default function Home() {
     } catch (error) {
       console.error("Error creating referral:", error);
       return false;
-    }
-  };
-
-  // Function to check user's referral stats
-  const updateReferralStats = async () => {
-    if (!connected || !userReferralCode) return;
-    
-    try {
-      const playerDoc = doc(db, 'players', userReferralCode);
-      const playerSnap = await getDoc(playerDoc);
-      
-      if (playerSnap.exists()) {
-        const data = playerSnap.data() as PlayerData;
-        
-        // Get unique referrals counting
-        const invalidInvites = new Set(data.invalidInvites?.referrals || []);
-        const validInvites = new Set(data.validInvites?.referrals || []);
-        const eligibleInvites = new Set(data.eligibleInvites?.referrals || []);
-
-        setReferralStats({
-          invalidInvites: invalidInvites.size,
-          validInvites: validInvites.size,
-          eligibleInvites: eligibleInvites.size
-        });
-        setFeedersBalance(data.feeders || 0);
-      } else {
-        // Initialize if doesn't exist
-        await setDoc(playerDoc, {
-          walletAddress: walletAddress,
-          feeders: 0,
-          totalInvites: 0,
-          eligibleInvites: { total: 0, referrals: [] },
-          validInvites: { total: 0, referrals: [] },
-          invalidInvites: { total: 0, referrals: [] }
-        });
-        
-        setReferralStats({
-          invalidInvites: 0,
-          validInvites: 0,
-          eligibleInvites: 0
-        });
-        setFeedersBalance(0);
-      }
-    } catch (error) {
-      console.error("Error fetching referral stats:", error);
     }
   };
 
@@ -855,7 +779,7 @@ export default function Home() {
   
       // Update both referrer's and user's stats
       await Promise.all([
-        fetchReferralStats(), // Keep this one
+        fetchReferralStats(), // This single function now handles all stats updates
         savedReferrer && updateReferrerStats(savedReferrer) // Update referrer's stats if exists
       ]);
   
