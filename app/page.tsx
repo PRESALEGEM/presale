@@ -517,154 +517,76 @@ export default function Home() {
     setError(null);
     setIsLoading(true);
 
-    if (!connected || !walletAddress) {
-      setError("Please connect your wallet first.");
-      toast({
-        message: "Please connect your wallet first.",
-        type: "error"
-      });
-      setIsLoading(false);
-      return;
-    }
-
-    if (!amount || parseFloat(amount) <= 0) {
-      setError("Please enter a valid amount.");
-      toast({
-        message: "Please enter a valid amount.",
-        type: "error"
-      });
-      setIsLoading(false);
-      return;
-    }
-
     try {
-      // Check if user already has a referrer registered
-      const existingReferrer = await checkUserReferrer();
-      
-      // Use existing referrer, or the input referral code, or the saved referrer
-      const referrerToUse = existingReferrer || referralCode || savedReferrer;
-      
-      // If new referral code is provided and different from saved, store it
-      if (referralCode && referralCode !== savedReferrer && !existingReferrer) {
-        try {
-          localStorage.setItem('spiderReferrer', referralCode);
-          setSavedReferrer(referralCode);
-        } catch (err) {
-          console.error("Error saving to local storage:", err);
-        }
+      // Basic validations
+      if (!connected || !walletAddress) {
+        throw new Error("Please connect your wallet first.");
       }
-      
-      // Record the purchase with referral
-      if (referrerToUse) {
-        // Update referrer stats
-        const purchaseAmount = parseFloat(amount);
-        const isEligible = purchaseAmount >= 2; // 100 SPIDER = 2 TON
-        
-        const { data: referralData, error: statsCheckError } = await supabase
-          .from('referrals')
-          .select('*')
-          .eq('referrer', referrerToUse)
-          .maybeSingle();
-          
-        if (statsCheckError && statsCheckError.code !== 'PGRST116') throw statsCheckError;
-        
-        // Update referrer stats with proper invite categorization
-        const { error: statsError } = await supabase.from('referrals').upsert([{
-          referrer: referrerToUse,
-          totalAmount: referralData ? referralData.totalAmount + purchaseAmount : purchaseAmount,
-          referralCount: referralData ? referralData.referralCount + 1 : 1,
-          validInvites: referralData ? (referralData.validInvites || 0) + 1 : 1,
-          eligibleInvites: referralData ? 
-            (referralData.eligibleInvites || 0) + (isEligible ? 1 : 0) : 
-            (isEligible ? 1 : 0),
-        }], {
-          onConflict: 'referrer',
-          ignoreDuplicates: false
-        });
 
-        if (statsError) throw statsError;
-        
-        // Record the purchase
-        const { error: purchaseError } = await supabase.from('purchases').insert([{
+      if (!amount || parseFloat(amount) <= 0) {
+        throw new Error("Please enter a valid amount.");
+      }
+
+      // Check if there's a referral code to bind
+      if (referralCode && !savedReferrer) {
+        // Verify the referral code first
+        const isValid = await verifyReferralCode(referralCode);
+        if (!isValid) {
+          throw new Error("Invalid referral code. Please check and try again.");
+        }
+
+        // Bind the referral code first
+        await supabase.from('user_referrals').insert([{
           user: walletAddress,
-          amount: purchaseAmount,
+          referrer: referralCode,
           timestamp: new Date().toISOString()
         }]);
-        
-        if (purchaseError) {
-          console.error("Error recording purchase:", purchaseError);
-        }
-        
-        // If this is a new referral relationship, record it
-        if (referralCode && !existingReferrer) {
-          const { error: referralError } = await supabase.from('user_referrals').insert([
-            {
-              user: walletAddress,
-              referrer: referralCode,
-              timestamp: new Date().toISOString()
-            }
-          ]);
-          
-          if (referralError) {
-            console.error("Error recording referral relationship:", referralError);
-            toast({
-              message: "Referral recorded, but there was an issue storing the relationship.",
-              type: "info"
-            });
-          } else {
-            toast({
-              message: "Referral successfully recorded!",
-              type: "success"
-            });
-            
-            // Distribute rewards for the successful referral
-            await distributeReferralRewards(referralCode, purchaseAmount);
+
+        // Save to localStorage
+        localStorage.setItem('spiderReferrer', referralCode);
+        setSavedReferrer(referralCode);
+      }
+
+      // Proceed with the transaction
+      await tonConnectUI.sendTransaction({
+        validUntil: Math.floor(Date.now() / 1000) + 600,
+        messages: [
+          {
+            address: receiverAddress,
+            amount: (parseFloat(amount) * 1e9).toString(),
           }
-        }
+        ]
+      });
+
+      // If transaction successful, update referral stats
+      if (savedReferrer || referralCode) {
+        const referrerToUse = savedReferrer || referralCode;
+        await distributeReferralRewards(referrerToUse, parseFloat(amount));
       }
-      
-      // Handle TON transaction
-      try {
-        await tonConnectUI.sendTransaction({
-          validUntil: Math.floor(Date.now() / 1000) + 600,
-          messages: [
-            {
-              address: receiverAddress,
-              amount: (parseFloat(amount) * 1e9).toString(),
-            }
-          ]
-        });
-        
-        // Transaction was sent, refresh data
-        toast({
-          message: "Transaction sent successfully!",
-          type: "success"
-        });
-        
-        // Refresh all data
-        await Promise.all([
-          fetchBalances(), 
-          fetchLeaderboard(),
-          fetchReferralStats() // Refresh referral stats after purchase
-        ]);
-        
-        // Clear input fields after successful transaction
-        setAmount("");
+
+      // Refresh data
+      await Promise.all([
+        fetchBalances(),
+        fetchLeaderboard(),
+        fetchReferralStats()
+      ]);
+
+      // Clear input fields
+      setAmount("");
+      if (!savedReferrer) {
         setReferralCode("");
-      } catch (txError) {
-        console.error("Transaction error:", txError);
-        toast({
-          message: "Transaction failed. Please try again.",
-          type: "error"
-        });
-        throw new Error("Transaction failed. Please try again.");
       }
-      
-    } catch (error) {
-      console.error("Error processing purchase:", error);
-      setError("Transaction failed. Please try again.");
+
       toast({
-        message: "Transaction failed. Please try again.",
+        message: "Transaction completed successfully!",
+        type: "success"
+      });
+
+    } catch (error: any) {
+      console.error("Transaction error:", error);
+      setError(error.message || "Transaction failed. Please try again.");
+      toast({
+        message: error.message || "Transaction failed. Please try again.",
         type: "error"
       });
     } finally {
