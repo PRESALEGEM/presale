@@ -695,46 +695,60 @@ export default function Home() {
   };
 
   const handlePurchase = async () => {
-    // ...existing code...
-    
-    // After successful purchase, update referral stats if user has a referrer
-    const userRefDoc = doc(db, 'user_referrals', walletAddress);
-    const userRefSnap = await getDoc(userRefDoc);
-    
-    if (userRefSnap.exists()) {
-      const referrerCode = userRefSnap.data().referrer;
-      const referrerDoc = doc(db, 'referrals', referrerCode);
-      
-      await runTransaction(db, async (transaction) => {
-        const referrerSnap = await transaction.get(referrerDoc);
-        const currentStats = referrerSnap.data() || {
-          totalAmount: 0,
-          referralCount: 0,
-          validInvites: 0,
-          eligibleInvites: 0,
-          invalidInvites: 0
-        };
-        
-        // Decrease invalid invites and increase valid invites
-        const updates = {
-          invalidInvites: Math.max(0, (currentStats.invalidInvites || 0) - 1),
-          validInvites: (currentStats.validInvites || 0) + 1,
-          lastUpdated: new Date().toISOString()
-        };
-        
-        // If purchase amount >= 100, increment eligible invites
-        if (amount >= 100) {
-          updates.eligibleInvites = (currentStats.eligibleInvites || 0) + 1;
-        }
-        
-        transaction.update(referrerDoc, updates);
+    if (!walletAddress) {
+      toast({
+        message: "Please connect your wallet first",
+        type: "error"
       });
-      
-      // Distribute referral rewards
-      await distributeReferralRewards(referrerCode, amount);
+      return;
     }
-    
+  
     // ...existing code...
+  
+    try {
+      // After successful purchase, update referral stats if user has a referrer
+      const userRefDoc = doc(db, 'user_referrals', walletAddress as string);
+      const userRefSnap = await getDoc(userRefDoc);
+      
+      if (userRefSnap.exists()) {
+        const referrerCode = userRefSnap.data().referrer;
+        const referrerDoc = doc(db, 'referrals', referrerCode);
+        
+        await runTransaction(db, async (transaction) => {
+          const referrerSnap = await transaction.get(referrerDoc);
+          if (!referrerSnap.exists()) return;
+  
+          const currentStats = referrerSnap.data() || {
+            totalAmount: 0,
+            referralCount: 0,
+            validInvites: 0,
+            eligibleInvites: 0,
+            invalidInvites: 0
+          };
+          
+          // Decrease invalid invites and increase valid invites
+          const updates = {
+            invalidInvites: Math.max(0, (currentStats.invalidInvites || 0) - 1),
+            validInvites: (currentStats.validInvites || 0) + 1,
+            lastUpdated: new Date().toISOString()
+          };
+          
+          // If purchase amount >= 100, increment eligible invites
+          if (parseFloat(amount) >= 100) {
+            updates.eligibleInvites = (currentStats.eligibleInvites || 0) + 1;
+          }
+          
+          transaction.update(referrerDoc, updates);
+        });
+        
+        // Distribute referral rewards
+        await distributeReferralRewards(referrerCode, parseFloat(amount));
+      }
+  
+      // ...existing code...
+    } catch (error: any) {
+      // ...existing code...
+    }
   };
 
   if (error) {
