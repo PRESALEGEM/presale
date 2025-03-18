@@ -7,12 +7,12 @@ import { X, AlertCircle, CheckCircle, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // Add Toast props interface
-export interface ToastProps
-  extends React.ComponentPropsWithoutRef<typeof ToastPrimitives.Root>,
-    VariantProps<typeof toastVariants> {
+export interface ToastProps {
+  variant?: VariantProps<typeof toastVariants>['variant'];
   title?: React.ReactNode;
   description?: React.ReactNode;
   action?: ToastActionElement;
+  className?: string;
 }
 
 const ToastProvider = ToastPrimitives.Provider;
@@ -50,8 +50,7 @@ const toastVariants = cva(
 
 const Toast = React.forwardRef<
   React.ElementRef<typeof ToastPrimitives.Root>,
-  React.ComponentPropsWithoutRef<typeof ToastPrimitives.Root> &
-    VariantProps<typeof toastVariants>
+  ToastProps & Omit<React.ComponentPropsWithoutRef<typeof ToastPrimitives.Root>, keyof ToastProps>
 >(({ className, variant, ...props }, ref) => {
   return (
     <ToastPrimitives.Root
