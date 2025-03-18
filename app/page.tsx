@@ -199,16 +199,15 @@ export default function Home() {
       const referralsRef = collection(db, 'referrals');
       const q = query(
         referralsRef,
-        orderBy('validInvites', 'desc'),
-        orderBy('eligibleInvites', 'desc'),
+        orderBy('totalAmount', 'desc'),
         limit(10)
       );
       
       const querySnapshot = await getDocs(q);
       const leaderboardData = querySnapshot.docs.map(doc => ({
         referrer: doc.id,
-        totalAmount: 0, // Add default value or get from your data
-        referralCount: 0, // Add default value or get from your data
+        totalAmount: doc.data().totalAmount || 0,
+        referralCount: doc.data().referralCount || 0,
         validInvites: doc.data().validInvites || 0,
         eligibleInvites: doc.data().eligibleInvites || 0
       }));
@@ -266,47 +265,40 @@ export default function Home() {
     if (!connected || !userReferralCode) return;
     
     try {
-      const referralsRef = collection(db, 'user_referrals');
-      const q = query(referralsRef, where('referrer', '==', userReferralCode));
-      const querySnapshot = await getDocs(q);
+      // Get referrer document
+      const referrerDoc = doc(db, 'referrals', userReferralCode);
+      const referrerSnap = await getDoc(referrerDoc);
       
-      let invalidCount = 0;
-      let validCount = 0;
-      let eligibleCount = 0;
-      
-      for (const doc of querySnapshot.docs) {
-        const purchaseRef = collection(db, 'purchases');
-        const purchaseQuery = query(
-          purchaseRef,
-          where('user', '==', doc.data().user),
-          orderBy('timestamp', 'desc'),
-          limit(1)
-        );
+      if (referrerSnap.exists()) {
+        const data = referrerSnap.data();
+        setReferralStats({
+          invalidInvites: data.invalidInvites || 0,
+          validInvites: data.validInvites || 0,
+          eligibleInvites: data.eligibleInvites || 0
+        });
+      } else {
+        // Initialize stats if referrer document doesn't exist
+        await setDoc(referrerDoc, {
+          totalAmount: 0,
+          referralCount: 0,
+          validInvites: 0,
+          eligibleInvites: 0,
+          invalidInvites: 0,
+          lastUpdated: new Date().toISOString()
+        });
         
-        const purchaseSnap = await getDocs(purchaseQuery);
-        
-        if (purchaseSnap.empty) {
-          invalidCount++;
-        } else {
-          const purchase = purchaseSnap.docs[0].data();
-          if (purchase.amount >= 100) {
-            eligibleCount++;
-          } else if (purchase.amount > 0) {
-            validCount++;
-          } else {
-            invalidCount++;
-          }
-        }
+        setReferralStats({
+          invalidInvites: 0,
+          validInvites: 0,
+          eligibleInvites: 0
+        });
       }
-      
-      setReferralStats({
-        invalidInvites: invalidCount,
-        validInvites: validCount,
-        eligibleInvites: eligibleCount
-      });
-      
     } catch (error) {
       console.error("Error fetching referral stats:", error);
+      toast({
+        message: "Failed to fetch referral stats",
+        type: "error"
+      });
     }
   };
 
