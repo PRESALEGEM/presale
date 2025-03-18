@@ -826,7 +826,7 @@ export default function Home() {
               </CardHeader>
               <CardContent className="space-y-4">
                 {connected && userReferralCode ? (
-                  <>
+                  <div className="space-y-4">
                     <p className="text-lg">Your Referral Code:</p>
                     <div className="bg-white/20 p-4 rounded-lg text-2xl font-mono flex justify-between items-center">
                       <span>{userReferralCode}</span>
@@ -944,27 +944,28 @@ export default function Home() {
                       </Button>
                     </div>
                     
-                    <div className="mt-6 space-y-4">
-                      <h3 className="text-xl font-semibold">How it works</h3>
-                      <div className="space-y-3">
-                        <div className="bg-white/10 p-3 rounded-lg">
-                          <p className="font-medium">1. Share your referral code</p>
-                          <p className="text-sm opacity-80">Share your unique code with friends</p>
-                        </div>
-                        <div className="bg-white/10 p-3 rounded-lg">
-                          <p className="font-medium">2. Friends buy $SPIDER</p>
-                          <p className="text-sm opacity-80">They enter your code during purchase</p>
-                        </div>
-                        <div className="bg-white/10 p-3 rounded-lg">
-                          <p className="font-medium">3. Both earn Feeders rewards</p>
-                          <p className="text-sm opacity-80">
-                            Both you and your friend get 5 Feeders<br />
-                            when they purchase any amount of $SPIDER
-                          </p>
+                      <div className="mt-6 space-y-4">
+                        <h3 className="text-xl font-semibold">How it works</h3>
+                        <div className="space-y-3">
+                          <div className="bg-white/10 p-3 rounded-lg">
+                            <p className="font-medium">1. Share your referral code</p>
+                            <p className="text-sm opacity-80">Share your unique code with friends</p>
+                          </div>
+                          <div className="bg-white/10 p-3 rounded-lg">
+                            <p className="font-medium">2. Friends buy $SPIDER</p>
+                            <p className="text-sm opacity-80">They enter your code during purchase</p>
+                          </div>
+                          <div className="bg-white/10 p-3 rounded-lg">
+                            <p className="font-medium">3. Both earn Feeders rewards</p>
+                            <p className="text-sm opacity-80">
+                              Both you and your friend get 5 Feeders<br />
+                              when they purchase any amount of $SPIDER
+                            </p>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </>
+                  </div>
                 ) : (
                   <div className="text-center py-8">
                     <p className="mb-4">Connect your wallet to get your referral code</p>
