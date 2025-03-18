@@ -3,10 +3,7 @@
 import * as React from 'react';
 import * as ToastPrimitives from '@radix-ui/react-toast';
 import { cva, type VariantProps } from 'class-variance-authority';
-import { X } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { AlertCircle, CheckCircle, Info } from 'lucide-react';
-
+import { X, AlertCircle, CheckCircle, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const ToastProvider = ToastPrimitives.Provider;
@@ -114,14 +111,15 @@ const ToastDescription = React.forwardRef<
 ));
 ToastDescription.displayName = ToastPrimitives.Description.displayName;
 
-interface ToastProps {
+// Rename custom Toast component to CustomToast
+export interface CustomToastProps {
   message: string;
   type: 'success' | 'error' | 'info';
   onClose: () => void;
 }
 
-export const Toast = ({ message, type, onClose }: ToastProps) => {
-  useEffect(() => {
+export const CustomToast = ({ message, type, onClose }: CustomToastProps) => {
+  React.useEffect(() => {
     const timer = setTimeout(() => {
       onClose();
     }, 5000);
