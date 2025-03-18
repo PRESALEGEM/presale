@@ -301,10 +301,6 @@ export default function Home() {
 
   // Function to verify if a referral code is valid
   const verifyReferralCode = async (code: string) => {
-    if (!code || code.length < 8) {
-      return false;
-    }
-  
     // Prevent self-referral
     if (code === userReferralCode) {
       toast({
@@ -314,21 +310,18 @@ export default function Home() {
       return false;
     }
   
-    try {
-      const { data, error } = await supabase
-        .from('referrals')
-        .select('referrer')
-        .eq('referrer', code)
-        .maybeSingle();
-      
-      if (error) throw error;
-      
-      // Only return true if the code exists in the referrals table
-      return !!data;
-    } catch (error) {
-      console.error("Error verifying referral code:", error);
+    // Check format: [0-9]:[a-fA-F0-9]{6}
+    const tonAddressFormat = /^[0-9]:[a-fA-F0-9]{6}$/;
+    
+    if (!tonAddressFormat.test(code)) {
+      toast({
+        message: "Invalid format. Must be like '0:4d7f66'",
+        type: "error"
+      });
       return false;
     }
+  
+    return true;
   };
 
   // Function to check user's referral stats
@@ -910,7 +903,6 @@ export default function Home() {
                           </div>
                         )}
                       </div>
-                    </div>
                     
                     {/* Display Referral Stats with Feeders Balance */}
                     <div className="mt-6 space-y-4">
