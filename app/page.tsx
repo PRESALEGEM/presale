@@ -573,45 +573,53 @@ export default function Home() {
     }
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text)
-      .then(() => {
-        // Use toast notification instead of alert
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({
+        message: "Referral code copied to clipboard!",
+        type: "success"
+      });
+    } catch (err) {
+      // Fallback for browsers that don't support clipboard API
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
         toast({
           message: "Referral code copied to clipboard!",
           type: "success"
         });
-      })
-      .catch(err => {
-        console.error('Failed to copy text: ', err);
+      } catch (err) {
         toast({
-          message: "Failed to copy text. Please try again.",
+          message: "Failed to copy code. Please try manually copying.",
           type: "error"
         });
-      });
+      }
+      document.body.removeChild(textArea);
+    }
   };
 
   const handleBindReferralCode = async () => {
-    if (!referralCode) {
+    if (!referralCode || !connected || !walletAddress) {
       toast({
-        message: "Please enter a referral code",
-        type: "error"
-      });
-      return;
-    }
-  
-    if (!connected || !walletAddress) {
-      toast({
-        message: "Please connect your wallet first",
+        message: "Please connect your wallet and enter a referral code",
         type: "error"
       });
       return;
     }
   
     try {
-      // Check if user already has a referrer
-      const existingReferrer = await checkUserReferrer();
-      if (existingReferrer) {
+      // First perform all reads
+      const [userRefDoc, playerDoc] = await Promise.all([
+        getDoc(doc(db, 'user_referrals', walletAddress)),
+        getDoc(doc(db, 'players', referralCode))
+      ]);
+  
+      // Check existing referrer
+      if (userRefDoc.exists()) {
         toast({
           message: "You already have a referrer bound",
           type: "error"
@@ -619,35 +627,39 @@ export default function Home() {
         return;
       }
   
-      // Verify the referral code format
+      // Verify referral code
       const isValid = await verifyReferralCode(referralCode);
       if (!isValid) return;
-
-      // Create referral record if it doesn't exist
-      await createReferralIfNeeded(referralCode);
   
-      // Record the referral relationship
-      await setDoc(doc(db, 'user_referrals', walletAddress), {
-        user: walletAddress,
-        referrer: referralCode,
-        timestamp: new Date().toISOString()
-      });
-
-      // Update referrer's stats - increment invalid invites
-      const referrerDoc = doc(db, 'referrals', referralCode);
+      // Now perform the writes in a transaction
       await runTransaction(db, async (transaction) => {
-        const referrerSnap = await transaction.get(referrerDoc);
-        const currentStats = referrerSnap.data() || {
-          totalAmount: 0,
-          referralCount: 0,
-          validInvites: 0,
-          eligibleInvites: 0,
-          invalidInvites: 0
+        // Create or update player document
+        const playerRef = doc(db, 'players', referralCode);
+        const playerData = playerDoc.exists() ? playerDoc.data() : {
+          walletAddress: '',
+          feeders: 0,
+          totalInvites: 0,
+          eligibleInvites: { total: 0, referrals: [] },
+          validInvites: { total: 0, referrals: [] },
+          invalidInvites: { total: 0, referrals: [] }
         };
-        
-        transaction.update(referrerDoc, {
-          invalidInvites: (currentStats.invalidInvites || 0) + 1,
-          lastUpdated: new Date().toISOString()
+  
+        // Update invalid invites
+        const updatedInvalidInvites = {
+          total: (playerData.invalidInvites?.total || 0) + 1,
+          referrals: [...(playerData.invalidInvites?.referrals || []), walletAddress]
+        };
+  
+        transaction.set(playerRef, {
+          ...playerData,
+          invalidInvites: updatedInvalidInvites
+        }, { merge: true });
+  
+        // Record referral relationship
+        transaction.set(doc(db, 'user_referrals', walletAddress), {
+          user: walletAddress,
+          referrer: referralCode,
+          timestamp: new Date().toISOString()
         });
       });
   
@@ -659,9 +671,7 @@ export default function Home() {
         type: "success"
       });
   
-      // Refresh stats
       await fetchReferralStats();
-      
     } catch (err) {
       console.error("Error binding referral code:", err);
       toast({
@@ -672,7 +682,7 @@ export default function Home() {
   };
 
   const handlePurchase = async () => {
-    if (!walletAddress) {
+    if (!connected || !walletAddress) {
       toast({
         message: "Please connect your wallet first",
         type: "error"
@@ -680,57 +690,105 @@ export default function Home() {
       return;
     }
   
-    // ...existing code...
-  
     try {
-      // After successful purchase, update referral stats if user has a referrer
-      const userRefDoc = doc(db, 'user_referrals', walletAddress as string);
-      const userRefSnap = await getDoc(userRefDoc);
-      
-      if (userRefSnap.exists()) {
-        const referrerCode = userRefSnap.data().referrer;
-        const referrerDoc = doc(db, 'referrals', referrerCode);
-        
-        await runTransaction(db, async (transaction) => {
-          const referrerSnap = await transaction.get(referrerDoc);
-          if (!referrerSnap.exists()) return;
-  
-          const currentStats = referrerSnap.data() || {
-            totalAmount: 0,
-            referralCount: 0,
-            validInvites: 0,
-            eligibleInvites: 0,
-            invalidInvites: 0
-          };
-          
-          // Define the complete update object with all fields
-          const updates: {
-            invalidInvites: number;
-            validInvites: number;
-            eligibleInvites: number;
-            lastUpdated: string;
-          } = {
-            invalidInvites: Math.max(0, (currentStats.invalidInvites || 0) - 1),
-            validInvites: (currentStats.validInvites || 0) + 1,
-            eligibleInvites: currentStats.eligibleInvites || 0,
-            lastUpdated: new Date().toISOString()
-          };
-          
-          // If purchase amount >= 100, increment eligible invites
-          if (parseFloat(amount) >= 100) {
-            updates.eligibleInvites += 1;
-          }
-          
-          transaction.update(referrerDoc, updates);
-        });
-        
-        // Distribute referral rewards
-        await distributeReferralRewards(referrerCode, parseFloat(amount));
+      const purchaseAmount = parseFloat(amount);
+      if (!purchaseAmount || purchaseAmount <= 0) {
+        throw new Error("Please enter a valid amount.");
       }
   
-      // ...existing code...
+      // First perform all reads
+      const userRefDoc = savedReferrer ? 
+        await getDoc(doc(db, 'user_referrals', walletAddress)) : null;
+      const playerDoc = savedReferrer ? 
+        await getDoc(doc(db, 'players', savedReferrer)) : null;
+  
+      // Perform the transaction
+      await runTransaction(db, async (transaction) => {
+        // Create purchase record
+        const purchaseRef = doc(db, 'purchases', `${walletAddress}_${Date.now()}`);
+        transaction.set(purchaseRef, {
+          buyer: walletAddress,
+          amount: purchaseAmount,
+          timestamp: new Date().toISOString(),
+          status: 'pending',
+          referrer: savedReferrer
+        });
+  
+        if (savedReferrer && playerDoc) {
+          const playerRef = doc(db, 'players', savedReferrer);
+          const playerData = playerDoc.exists() ? playerDoc.data() : {
+            walletAddress: '',
+            feeders: 0,
+            totalInvites: 0,
+            eligibleInvites: { total: 0, referrals: [] },
+            validInvites: { total: 0, referrals: [] },
+            invalidInvites: { total: 0, referrals: [] }
+          };
+  
+          // Update stats
+          const updatedData = {
+            ...playerData,
+            totalInvites: (playerData.totalInvites || 0) + 1,
+            validInvites: {
+              total: (playerData.validInvites?.total || 0) + 1,
+              referrals: [...(playerData.validInvites?.referrals || []), walletAddress]
+            }
+          };
+  
+          // If purchase amount >= 100, update eligible invites
+          if (purchaseAmount >= 100) {
+            updatedData.eligibleInvites = {
+              total: (playerData.eligibleInvites?.total || 0) + 1,
+              referrals: [...(playerData.eligibleInvites?.referrals || []), walletAddress]
+            };
+          }
+  
+          // Remove from invalid invites if present
+          if (playerData.invalidInvites?.referrals?.includes(walletAddress)) {
+            updatedData.invalidInvites = {
+              total: Math.max(0, (playerData.invalidInvites.total || 1) - 1),
+              referrals: playerData.invalidInvites.referrals.filter(r => r !== walletAddress)
+            };
+          }
+  
+          transaction.set(playerRef, updatedData, { merge: true });
+        }
+      });
+  
+      // Proceed with blockchain transaction
+      await tonConnectUI.sendTransaction({
+        validUntil: Math.floor(Date.now() / 1000) + 600,
+        messages: [
+          {
+            address: receiverAddress,
+            amount: (purchaseAmount * 1e9).toString(),
+          }
+        ]
+      });
+  
+      if (savedReferrer) {
+        await distributeReferralRewards(savedReferrer, purchaseAmount);
+      }
+  
+      // Refresh all data
+      await Promise.all([
+        fetchBalances(),
+        fetchLeaderboard(),
+        fetchReferralStats()
+      ]);
+  
+      setAmount("");
+      toast({
+        message: "Purchase successful!",
+        type: "success"
+      });
+  
     } catch (error: any) {
-      // ...existing code...
+      console.error("Transaction error:", error);
+      toast({
+        message: error.message || "Transaction failed. Please try again.",
+        type: "error"
+      });
     }
   };
 
