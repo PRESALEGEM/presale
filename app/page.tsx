@@ -1331,10 +1331,10 @@ export default function Home() {
         {toasts.map(({ id, message, type }) => (
           <div key={id} className="toast-enter">
             <Toast
-              message={message}
-              type={type}
-              onClose={() => removeToast(id)}
-            />
+              variant={type === 'success' ? 'default' : 'destructive'}
+            >
+              {message}
+            </Toast>
           </div>
         ))}
       </div>
