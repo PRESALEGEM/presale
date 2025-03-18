@@ -254,58 +254,43 @@ export default function Home() {
   const fetchLeaderboard = async () => {
     setIsFetchingLeaderboard(true);
     try {
-      // Get all user_referrals documents
-      const userReferralsRef = collection(db, 'user_referrals');
-      const userReferralsSnap = await getDocs(userReferralsRef);
+      // Get all purchases first
+      const purchasesRef = collection(db, 'purchases');
+      const purchasesSnap = await getDocs(purchasesRef);
 
       // Create a map to store referrer stats
       const referrerStatsMap = new Map<string, ReferrerStats>();
 
-      // Process each referral relationship
-      for (const doc of userReferralsSnap.docs) {
-        const data = doc.data();
-        const referrer = data.referrer;
-
-        // Initialize or update referrer stats
-        if (!referrerStatsMap.has(referrer)) {
-          referrerStatsMap.set(referrer, {
-            referrer: referrer,
-            totalAmount: 0,
-            referralCount: 1,
-            validInvites: 0,
-            eligibleInvites: 0
-          });
-        } else {
-          const stats = referrerStatsMap.get(referrer)!;
-          stats.referralCount++;
-          referrerStatsMap.set(referrer, stats);
-        }
-      }
-
-      // Get purchases to calculate amounts and validate invites
-      const purchasesRef = collection(db, 'purchases');
-      const purchasesSnap = await getDocs(purchasesRef);
-
-      for (const doc of purchasesSnap.docs) {
-        const purchase = doc.data();
+      // Process each purchase
+      for (const purchaseDoc of purchasesSnap.docs) {
+        const purchase = purchaseDoc.data();
         const buyer = purchase.buyer;
         
-        // Find if buyer has a referrer
-        const userReferralDoc = await getDoc(doc(db, 'user_referrals', buyer));
+        // Get the referrer information for this buyer
+        const userReferralRef = doc(db, 'user_referrals', buyer);
+        const userReferralSnap = await getDoc(userReferralRef);
         
-        if (userReferralDoc.exists()) {
-          const referrer = userReferralDoc.data().referrer;
-          const stats = referrerStatsMap.get(referrer);
+        if (userReferralSnap.exists()) {
+          const referralData = userReferralSnap.data();
+          const referrer = referralData.referrer;
           
-          if (stats) {
-            stats.totalAmount += purchase.amount;
+          // Initialize or update referrer stats
+          if (!referrerStatsMap.has(referrer)) {
+            referrerStatsMap.set(referrer, {
+              referrer: referrer,
+              totalAmount: purchase.amount || 0,
+              referralCount: 1,
+              validInvites: 1,
+              eligibleInvites: purchase.amount >= 100 ? 1 : 0
+            });
+          } else {
+            const stats = referrerStatsMap.get(referrer)!;
+            stats.totalAmount += purchase.amount || 0;
+            stats.referralCount++;
             stats.validInvites++;
-            
-            // Check if purchase makes this an eligible invite (100+ SPIDER)
             if (purchase.amount >= 100) {
               stats.eligibleInvites++;
             }
-            
             referrerStatsMap.set(referrer, stats);
           }
         }
@@ -322,8 +307,8 @@ export default function Home() {
       setLeaderboard([]);
     } finally {
       setIsFetchingLeaderboard(false);
-  }
-};
+    }
+  };
 
   // Function to check if user has a referrer
   const checkUserReferrer = async () => {
