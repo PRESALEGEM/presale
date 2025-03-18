@@ -78,15 +78,63 @@ export default function Home() {
   useEffect(() => {
     const checkConnection = async () => {
       try {
-        // Check if wallet is connected
         const isConnected = tonConnectUI.connected;
         setConnected(isConnected);
         
         if (isConnected && tonConnectUI.wallet) {
           const walletInfo = tonConnectUI.wallet;
-          setWalletAddress(walletInfo.account.address);
-          // Generate referral code from wallet address
-          setUserReferralCode(walletInfo.account.address.slice(0, 8));
+          const walletAddress = walletInfo.account.address;
+          setWalletAddress(walletAddress);
+          setUserReferralCode(walletAddress.slice(0, 8));
+
+          // Initialize user data in Firestore
+          try {
+            const userDoc = doc(db, 'users', walletAddress);
+            const userSnap = await getDoc(userDoc);
+
+            if (!userSnap.exists()) {
+              await setDoc(userDoc, {
+                address: walletAddress,
+                referralCode: walletAddress.slice(0, 8),
+                createdAt: new Date().toISOString(),
+                totalPurchases: 0,
+                lastActive: new Date().toISOString()
+              });
+
+              // Initialize referrals document
+              const referralDoc = doc(db, 'referrals', walletAddress.slice(0, 8));
+              const referralSnap = await getDoc(referralDoc);
+
+              if (!referralSnap.exists()) {
+                await setDoc(referralDoc, {
+                  totalAmount: 0,
+                  referralCount: 0,
+                  validInvites: 0,
+                  eligibleInvites: 0,
+                  invalidInvites: 0,
+                  lastUpdated: new Date().toISOString()
+                });
+              }
+
+              // Initialize feeders balance
+              const balanceDoc = doc(db, 'feeders_balances', walletAddress);
+              const balanceSnap = await getDoc(balanceDoc);
+
+              if (!balanceSnap.exists()) {
+                await setDoc(balanceDoc, {
+                  balance: 0,
+                  last_updated: new Date().toISOString()
+                });
+              }
+            } else {
+              // Update last active timestamp
+              await updateDoc(userDoc, {
+                lastActive: new Date().toISOString()
+              });
+            }
+          } catch (err) {
+            console.error("Error initializing user data:", err);
+          }
         } else {
           setWalletAddress(null);
           setUserReferralCode("");
