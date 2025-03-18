@@ -61,6 +61,21 @@ interface ReferrerStats {
   eligibleInvites: number;
 }
 
+// Add these interfaces at the top with other interfaces
+interface InviteData {
+  total: number;
+  referrals: string[];
+}
+
+interface PlayerData {
+  walletAddress: string;
+  feeders: number;
+  totalInvites: number;
+  eligibleInvites: InviteData;
+  validInvites: InviteData;
+  invalidInvites: InviteData;
+}
+
 export default function Home() {
   const [tonConnectUI] = useTonConnectUI();
   const [connected, setConnected] = useState(false);
@@ -142,6 +157,20 @@ export default function Home() {
               // Update last active timestamp
               await updateDoc(userDoc, {
                 lastActive: new Date().toISOString()
+              });
+            }
+
+            const playerDoc = doc(db, 'players', walletAddress.slice(0, 8));
+            const playerSnap = await getDoc(playerDoc);
+
+            if (!playerSnap.exists()) {
+              await setDoc(playerDoc, {
+                walletAddress: walletAddress,
+                feeders: 0,
+                totalInvites: 0,
+                eligibleInvites: { total: 0, referrals: [] },
+                validInvites: { total: 0, referrals: [] },
+                invalidInvites: { total: 0, referrals: [] }
               });
             }
           } catch (err) {
@@ -635,7 +664,7 @@ export default function Home() {
       await runTransaction(db, async (transaction) => {
         // Create or update player document
         const playerRef = doc(db, 'players', referralCode);
-        const playerData = playerDoc.exists() ? playerDoc.data() : {
+        const playerData = playerDoc.exists() ? playerDoc.data() as PlayerData : {
           walletAddress: '',
           feeders: 0,
           totalInvites: 0,
@@ -645,7 +674,7 @@ export default function Home() {
         };
   
         // Update invalid invites
-        const updatedInvalidInvites = {
+        const updatedInvalidInvites: InviteData = {
           total: (playerData.invalidInvites?.total || 0) + 1,
           referrals: [...(playerData.invalidInvites?.referrals || []), walletAddress]
         };
@@ -697,8 +726,6 @@ export default function Home() {
       }
   
       // First perform all reads
-      const userRefDoc = savedReferrer ? 
-        await getDoc(doc(db, 'user_referrals', walletAddress)) : null;
       const playerDoc = savedReferrer ? 
         await getDoc(doc(db, 'players', savedReferrer)) : null;
   
@@ -716,7 +743,7 @@ export default function Home() {
   
         if (savedReferrer && playerDoc) {
           const playerRef = doc(db, 'players', savedReferrer);
-          const playerData = playerDoc.exists() ? playerDoc.data() : {
+          const playerData = playerDoc.exists() ? playerDoc.data() as PlayerData : {
             walletAddress: '',
             feeders: 0,
             totalInvites: 0,
@@ -726,8 +753,7 @@ export default function Home() {
           };
   
           // Update stats
-          const updatedData = {
-            ...playerData,
+          const updatedData: Partial<PlayerData> = {
             totalInvites: (playerData.totalInvites || 0) + 1,
             validInvites: {
               total: (playerData.validInvites?.total || 0) + 1,
