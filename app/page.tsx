@@ -726,16 +726,22 @@ export default function Home() {
             invalidInvites: 0
           };
           
-          // Decrease invalid invites and increase valid invites
-          const updates = {
+          // Define the complete update object with all fields
+          const updates: {
+            invalidInvites: number;
+            validInvites: number;
+            eligibleInvites: number;
+            lastUpdated: string;
+          } = {
             invalidInvites: Math.max(0, (currentStats.invalidInvites || 0) - 1),
             validInvites: (currentStats.validInvites || 0) + 1,
+            eligibleInvites: currentStats.eligibleInvites || 0,
             lastUpdated: new Date().toISOString()
           };
           
           // If purchase amount >= 100, increment eligible invites
           if (parseFloat(amount) >= 100) {
-            updates.eligibleInvites = (currentStats.eligibleInvites || 0) + 1;
+            updates.eligibleInvites += 1;
           }
           
           transaction.update(referrerDoc, updates);
