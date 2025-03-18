@@ -15,7 +15,19 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TonConnectButton, useTonConnectUI } from "@tonconnect/ui-react";
-import { createClient } from '@supabase/supabase-js';
+import { db } from '@/lib/firebase';
+import { 
+  collection, 
+  doc, 
+  getDoc, 
+  getDocs, 
+  setDoc, 
+  updateDoc, 
+  query, 
+  where, 
+  orderBy, 
+  limit 
+} from 'firebase/firestore';
 
 // Create a simple toast interface for this component
 interface ToastProps {
@@ -28,44 +40,6 @@ interface ToastProps {
 const toast = ({ message, type = "info" }: ToastProps) => {
   alert(`${type.toUpperCase()}: ${message}`);
 };
-
-// Safely set up Supabase client with error handling
-let supabase: any;
-try {
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    throw new Error('Missing Supabase environment variables');
-  }
-
-  supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    {
-      realtime: {
-        params: {
-          eventsPerSecond: 1 // Limit to avoid rate limiting issues
-        }
-      }
-    }
-  );
-} catch (error) {
-  console.error("Error initializing Supabase client:", error);
-  // Create a stub for Supabase that returns empty data with no errors
-  supabase = {
-    from: () => ({
-      select: () => ({
-        order: () => ({
-          limit: () => ({
-            maybeSingle: async () => ({ data: null, error: null }),
-            single: async () => ({ data: null, error: null }),
-            then: (callback: any) => Promise.resolve(callback({ data: [], error: null }))
-          })
-        })
-      }),
-      upsert: async () => ({ error: null }),
-      insert: async () => ({ error: null })
-    })
-  };
-}
 
 interface Referral {
   referrer: string;
@@ -224,56 +198,23 @@ export default function Home() {
   const fetchLeaderboard = async () => {
     setIsFetchingLeaderboard(true);
     try {
-      // Add a timeout to prevent hanging requests
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Leaderboard fetch timeout')), 15000)
+      const referralsRef = collection(db, 'referrals');
+      const q = query(
+        referralsRef,
+        orderBy('validInvites', 'desc'),
+        orderBy('eligibleInvites', 'desc'),
+        limit(10)
       );
       
-      const fetchPromise = supabase
-        .from('referrals')
-        .select('*')
-        .order('validInvites', { ascending: false })
-        .order('eligibleInvites', { ascending: false })
-        .limit(10);
+      const querySnapshot = await getDocs(q);
+      const leaderboardData = querySnapshot.docs.map(doc => ({
+        referrer: doc.id,
+        ...doc.data()
+      }));
       
-      // Race between the fetch and the timeout
-      const { data, error: supabaseError } = await Promise.race([
-        fetchPromise,
-        timeoutPromise.then(() => ({ data: null, error: new Error('Timeout') }))
-      ]) as any;
-
-      if (supabaseError) {
-        console.error("Supabase error when fetching leaderboard:", supabaseError);
-        // Check if the table exists - this is a common issue
-        const { data: tableExists } = await supabase
-          .from('referrals')
-          .select('referrer')
-          .limit(1)
-          .maybeSingle();
-        
-        if (tableExists === null && !supabaseError.message?.includes('does not exist')) {
-          toast({
-            message: "No referrals found. Be the first to refer someone!",
-            type: "info"
-          });
-          setLeaderboard([]);
-        } else {
-          throw supabaseError;
-        }
-      } else {
-        console.log("Leaderboard data:", data);
-        // Process data to include only valid and eligible invites for ranking
-        const processedData = data?.map((entry: any) => ({
-          ...entry,
-          // Calculate total points for display (sum of valid and eligible invites)
-          referralCount: (entry.validInvites || 0) + (entry.eligibleInvites || 0)
-        })) || [];
-        
-        setLeaderboard(processedData);
-      }
+      setLeaderboard(leaderboardData);
     } catch (error) {
       console.error("Error fetching leaderboard:", error);
-      // Just set empty leaderboard without showing error toast
       setLeaderboard([]);
     } finally {
       setIsFetchingLeaderboard(false);
@@ -285,14 +226,9 @@ export default function Home() {
     if (!walletAddress) return null;
     
     try {
-      const { data, error: supabaseError } = await supabase
-        .from('user_referrals')
-        .select('referrer')
-        .eq('user', walletAddress)
-        .single();
-        
-      if (supabaseError && supabaseError.code !== 'PGRST116') throw supabaseError;
-      return data?.referrer || null;
+      const userRefDoc = doc(db, 'user_referrals', walletAddress);
+      const docSnap = await getDoc(userRefDoc);
+      return docSnap.exists() ? docSnap.data().referrer : null;
     } catch (error) {
       console.error("Error checking user referrer:", error);
       return null;
@@ -329,46 +265,32 @@ export default function Home() {
     if (!connected || !userReferralCode) return;
     
     try {
-      // Get all users who used this user's referral code
-      const { data, error } = await supabase
-        .from('user_referrals')
-        .select('user, timestamp')
-        .eq('referrer', userReferralCode);
+      const referralsRef = collection(db, 'user_referrals');
+      const q = query(referralsRef, where('referrer', '==', userReferralCode));
+      const querySnapshot = await getDocs(q);
       
-      if (error) throw error;
-      
-      if (!data || data.length === 0) {
-        setReferralStats({
-          invalidInvites: 0,
-          validInvites: 0,
-          eligibleInvites: 0
-        });
-        return;
-      }
-      
-      // For each referred user, check their purchase amount to categorize them
       let invalidCount = 0;
       let validCount = 0;
       let eligibleCount = 0;
       
-      // For simplicity, we'll just check if they have any purchase record
-      for (const referral of data) {
-        const { data: purchaseData, error: purchaseError } = await supabase
-          .from('purchases')
-          .select('amount')
-          .eq('user', referral.user)
-          .order('timestamp', { ascending: false })
-          .limit(1);
-          
-        if (purchaseError) continue;
+      for (const doc of querySnapshot.docs) {
+        const purchaseRef = collection(db, 'purchases');
+        const purchaseQuery = query(
+          purchaseRef,
+          where('user', '==', doc.data().user),
+          orderBy('timestamp', 'desc'),
+          limit(1)
+        );
         
-        if (!purchaseData || purchaseData.length === 0) {
+        const purchaseSnap = await getDocs(purchaseQuery);
+        
+        if (purchaseSnap.empty) {
           invalidCount++;
         } else {
-          const totalPurchase = purchaseData[0].amount;
-          if (totalPurchase >= 100) {
+          const purchase = purchaseSnap.docs[0].data();
+          if (purchase.amount >= 100) {
             eligibleCount++;
-          } else if (totalPurchase > 0) {
+          } else if (purchase.amount > 0) {
             validCount++;
           } else {
             invalidCount++;
@@ -392,18 +314,10 @@ export default function Home() {
     if (!walletAddress) return;
     
     try {
-      const { data, error } = await supabase
-        .from('feeders_balances')
-        .select('balance')
-        .eq('user', walletAddress)
-        .maybeSingle();
-        
-      if (error) {
-        console.error("Error fetching feeders balance:", error);
-        return;
-      }
+      const balanceDoc = doc(db, 'feeders_balances', walletAddress);
+      const docSnap = await getDoc(balanceDoc);
       
-      setFeedersBalance(data?.balance || 0);
+      setFeedersBalance(docSnap.exists() ? docSnap.data().balance : 0);
     } catch (error) {
       console.error("Error fetching feeders balance:", error);
     }
@@ -415,14 +329,11 @@ export default function Home() {
     
     try {
       // First, verify the referrer exists
-      const { data: referrerData, error: referrerError } = await supabase
-        .from('referrals')
-        .select('referrer')
-        .eq('referrer', referrerCode)
-        .maybeSingle();
+      const referrerDoc = doc(db, 'referrals', referrerCode);
+      const referrerSnap = await getDoc(referrerDoc);
       
-      if (referrerError || !referrerData) {
-        console.error("Could not find referrer:", referrerError);
+      if (!referrerSnap.exists()) {
+        console.error("Could not find referrer");
         return;
       }
       
@@ -438,20 +349,20 @@ export default function Home() {
       // Record the rewards
       await Promise.all([
         // Record referrer reward
-        supabase.from('rewards').insert([{
+        setDoc(doc(db, 'rewards', `${referrerCode}_referrer_feeders`), {
           user: referrerCode,
           amount: FEEDERS_REWARD,
           type: 'referrer_feeders',
           timestamp: new Date().toISOString()
-        }]),
+        }),
         
         // Record invited user reward
-        supabase.from('rewards').insert([{
+        setDoc(doc(db, 'rewards', `${walletAddress}_invited_feeders`), {
           user: walletAddress,
           amount: FEEDERS_REWARD,
           type: 'invited_feeders',
           timestamp: new Date().toISOString()
-        }])
+        })
       ]);
       
       // Refresh the feeders balance
@@ -470,36 +381,19 @@ export default function Home() {
   // Helper function to update feeders balance
   const updateFeedersBalance = async (userAddress: string, amount: number) => {
     try {
-      // First check if the user has an existing balance
-      const { data, error } = await supabase
-        .from('feeders_balances')
-        .select('balance')
-        .eq('user', userAddress)
-        .maybeSingle();
-        
-      if (error && error.code !== 'PGRST116') {
-        console.error("Error checking feeders balance:", error);
-        return;
-      }
+      const balanceDoc = doc(db, 'feeders_balances', userAddress);
+      const docSnap = await getDoc(balanceDoc);
       
-      // If user has an existing balance, update it
-      if (data) {
-        await supabase
-          .from('feeders_balances')
-          .update({ 
-            balance: data.balance + amount,
-            last_updated: new Date().toISOString()
-          })
-          .eq('user', userAddress);
+      if (docSnap.exists()) {
+        await updateDoc(balanceDoc, {
+          balance: docSnap.data().balance + amount,
+          last_updated: new Date().toISOString()
+        });
       } else {
-        // Otherwise, create a new record
-        await supabase
-          .from('feeders_balances')
-          .insert([{
-            user: userAddress,
-            balance: amount,
-            last_updated: new Date().toISOString()
-          }]);
+        await setDoc(balanceDoc, {
+          balance: amount,
+          last_updated: new Date().toISOString()
+        });
       }
     } catch (error) {
       console.error("Error updating feeders balance:", error);
@@ -529,11 +423,11 @@ export default function Home() {
         }
 
         // Bind the referral code first
-        await supabase.from('user_referrals').insert([{
+        await setDoc(doc(db, 'user_referrals', walletAddress), {
           user: walletAddress,
           referrer: referralCode,
           timestamp: new Date().toISOString()
-        }]);
+        });
 
         // Save to localStorage
         localStorage.setItem('spiderReferrer', referralCode);
@@ -644,13 +538,11 @@ export default function Home() {
   
     try {
       // Record the referral relationship in the database
-      const { error } = await supabase.from('user_referrals').insert([{
+      await setDoc(doc(db, 'user_referrals', walletAddress), {
         user: walletAddress,
         referrer: referralCode,
         timestamp: new Date().toISOString()
-      }]);
-  
-      if (error) throw error;
+      });
   
       // Save to localStorage only after successful database insert
       localStorage.setItem('spiderReferrer', referralCode);
