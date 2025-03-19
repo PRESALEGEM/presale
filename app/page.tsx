@@ -167,6 +167,9 @@ export default function Home() {
             batch.set(playerDoc, {
               walletAddress: walletAddress,
               totalInvites: 0,
+              spiderBalance: 0,  // Add this field
+              feeders: 0,
+              feedersClaimed: [], // Add this field
               validInvites: {
                 total: 0,
                 referrals: []
@@ -179,7 +182,6 @@ export default function Home() {
                 total: 0,
                 referrals: []
               },
-              feeders: 0,
               createdAt: new Date().toISOString(),
               lastUpdated: new Date().toISOString()
             });
@@ -584,6 +586,7 @@ export default function Home() {
       
       batch.set(playerDoc, {
         spiderBalance: newSpiderBalance,
+        lastUpdated: new Date().toISOString()
       }, { merge: true });
 
       // Create purchase record
