@@ -76,6 +76,8 @@ interface PlayerData {
   eligibleInvites: InviteData;
   validInvites: InviteData;
   invalidInvites: InviteData;
+  spiderBalance: number;
+  feedersClaimed: string[]; // Array of addresses that have claimed feeders
 }
 
 export default function Home() {
@@ -472,54 +474,48 @@ export default function Home() {
     try {
       const batch = writeBatch(db);
       const FEEDERS_REWARD = 5;
-      const timestamp = new Date().toISOString();
-  
-      // Get current player docs
-      const [referrerDoc, buyerDoc] = await Promise.all([
-        getDoc(doc(db, 'players', referrerCode)),
-        getDoc(doc(db, 'players', buyerAddress))
-      ]);
-  
-      // Update referrer's feeders
-      batch.set(doc(db, 'players', referrerCode), {
-        feeders: ((referrerDoc.exists() ? referrerDoc.data().feeders : 0) || 0) + FEEDERS_REWARD
+
+      // Get referrer doc
+      const referrerDoc = doc(db, 'players', referrerCode);
+      const referrerSnap = await getDoc(referrerDoc);
+      const referrerData = referrerSnap.data() as PlayerData;
+
+      // Check if buyer has already claimed feeders from this referrer
+      if (referrerData.feedersClaimed?.includes(buyerAddress)) {
+        return; // Already claimed feeders, skip distribution
+      }
+
+      // Update referrer's feeders and claimed list
+      batch.set(referrerDoc, {
+        feeders: (referrerData.feeders || 0) + FEEDERS_REWARD,
+        feedersClaimed: [...(referrerData.feedersClaimed || []), buyerAddress]
       }, { merge: true });
-  
+
       // Update buyer's feeders
-      batch.set(doc(db, 'players', buyerAddress), {
-        feeders: ((buyerDoc.exists() ? buyerDoc.data().feeders : 0) || 0) + FEEDERS_REWARD
+      const buyerDoc = doc(db, 'players', buyerAddress);
+      const buyerSnap = await getDoc(buyerDoc);
+      const buyerData = buyerSnap.exists() ? buyerSnap.data() as PlayerData : {
+        walletAddress: buyerAddress,
+        feeders: 0,
+        feedersClaimed: []
+      };
+
+      batch.set(buyerDoc, {
+        feeders: (buyerData.feeders || 0) + FEEDERS_REWARD
       }, { merge: true });
-  
-      // Record rewards
-      const rewardId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      batch.set(doc(db, 'rewards', `${referrerCode}_${rewardId}`), {
-        user: referrerCode,
-        amount: FEEDERS_REWARD,
-        type: 'referrer_reward',
-        purchaser: buyerAddress,
-        timestamp: timestamp
-      });
-  
-      batch.set(doc(db, 'rewards', `${buyerAddress}_${rewardId}`), {
-        user: buyerAddress,
-        amount: FEEDERS_REWARD,
-        type: 'purchase_reward',
-        referrer: referrerCode,
-        timestamp: timestamp
-      });
-  
+
       await batch.commit();
-  
+
       // Update UI for current user
       if (buyerAddress === walletAddress || referrerCode === userReferralCode) {
         await fetchFeedersBalance();
       }
-  
+
       showToast({
-        message: `Referral rewards distributed! Both users received ${FEEDERS_REWARD} feeders.`,
+        message: `First purchase rewards distributed! Both users received ${FEEDERS_REWARD} feeders.`,
         type: "success"
       });
-  
+
     } catch (error) {
       console.error("Error distributing rewards:", error);
       showToast({
