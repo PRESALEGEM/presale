@@ -462,10 +462,12 @@ export default function Home() {
     if (!walletAddress) return;
     
     try {
-      const playerDoc = doc(db, 'players', walletAddress);
+      // Use referral code (first 8 chars) as document ID
+      const referralCode = walletAddress.slice(0, 8);
+      const playerDoc = doc(db, 'players', referralCode);
       const docSnap = await getDoc(playerDoc);
       
-      setFeedersBalance(docSnap.exists() ? docSnap.data().feeders || 0 : 0);
+      setFeedersBalance(docSnap.exists() ? (docSnap.data().feeders || 0) : 0);
     } catch (error) {
       console.error("Error fetching feeders balance:", error);
     }
@@ -533,14 +535,17 @@ export default function Home() {
   const updateFeedersBalance = async (userAddress: string, amount: number) => {
     const batch = writeBatch(db);
     try {
-      const playerDoc = doc(db, 'players', userAddress);
+      // Use referral code (first 8 chars) as document ID
+      const referralCode = userAddress.slice(0, 8);
+      const playerDoc = doc(db, 'players', referralCode);
       const docSnap = await getDoc(playerDoc);
       
       const currentFeeders = docSnap.exists() ? (docSnap.data().feeders || 0) : 0;
       const newBalance = currentFeeders + amount;
 
       batch.set(playerDoc, {
-        feeders: newBalance
+        feeders: newBalance,
+        lastUpdated: new Date().toISOString()
       }, { merge: true });
 
       await batch.commit();
