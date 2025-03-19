@@ -166,9 +166,9 @@ export default function Home() {
           if (!playerSnap.exists()) {
             batch.set(playerDoc, {
               walletAddress: walletAddress,
-              totalInvites: 0,
+              totalInvites: 0,          // Add spiderBalance field
               spiderBalance: 0,  // Add this field
-              feeders: 0,
+              feeders: 0,med: [],        // Add feedersClaimed array
               feedersClaimed: [], // Add this field
               validInvites: {
                 total: 0,
@@ -373,11 +373,15 @@ export default function Home() {
         // Initialize if doesn't exist
         const initialData = {
           walletAddress: walletAddress,
+          spiderBalance: 0,          // Add spiderBalance field
           feeders: 0,
+          feedersClaimed: [],        // Add feedersClaimed array
           totalInvites: 0,
           eligibleInvites: { total: 0, referrals: [] },
           validInvites: { total: 0, referrals: [] },
-          invalidInvites: { total: 0, referrals: [] }
+          invalidInvites: { total: 0, referrals: [] },
+          createdAt: new Date().toISOString(),
+          lastUpdated: new Date().toISOString()
         };
         await setDoc(playerDoc, initialData);
         
