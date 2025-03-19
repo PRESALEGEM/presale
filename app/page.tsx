@@ -274,6 +274,11 @@ export default function Home() {
 
     setIsFetchingBalances(true);
     try {
+      // Add database balance check
+      const playerDoc = doc(db, 'players', addressToUse);
+      const playerSnap = await getDoc(playerDoc);
+      const dbSpiderBalance = playerSnap.exists() ? (playerSnap.data().spiderBalance || 0) : 0;
+      
       // Use Promise.all to fetch both balances in parallel
       const [tonResponse, jettonResponse] = await Promise.all([
         fetch(`https://tonapi.io/v2/accounts/${addressToUse}`, {
@@ -292,14 +297,8 @@ export default function Home() {
         setTonBalance((tonData.balance / 1e9).toFixed(2));
       }
 
-      if (!jettonResponse.ok) {
-        console.error("Jetton API error:", jettonResponse.status);
-        setSpiderBalance("Error");
-      } else {
-        const jettonData = await jettonResponse.json();
-        const jetton = jettonData.balances?.find((j: any) => j.jetton.address === contractAddress);
-        setSpiderBalance(jetton ? (jetton.balance / 1e9).toFixed(2) : "0");
-      }
+      // Set SPIDER balance from database
+      setSpiderBalance(dbSpiderBalance.toFixed(2));
     } catch (error) {
       console.error("Error fetching balances:", error);
       setError("Failed to fetch balances. Please try again.");
@@ -415,10 +414,11 @@ export default function Home() {
       return false;
     }
 
-    // Check format: 8 characters long
-    if (code.length !== 8) {
+    // Check format: must start with "0:" followed by 6 characters
+    const referralFormat = /^0:[a-z0-9]{6}$/i;
+    if (!referralFormat.test(code)) {
       showToast({
-        message: "Invalid referral code format. Must be 8 characters long.",
+        message: "Invalid referral code format. Must be in format '0:xxxxxx' where x is alphanumeric",
         type: "error"
       });
       return false;
@@ -562,74 +562,11 @@ export default function Home() {
     try {
       const purchaseAmount = parseFloat(amount);
       if (!purchaseAmount || purchaseAmount <= 0) throw new Error("Invalid amount");
-  
-      const batch = writeBatch(db);
-  
-      // 1. Create purchase record
-      const purchaseRef = doc(db, 'purchases', `${walletAddress}_${Date.now()}`);
-      batch.set(purchaseRef, {
-        buyer: walletAddress,
-        amount: purchaseAmount,
-        timestamp: new Date().toISOString(),
-        status: 'pending',
-        referrer: savedReferrer
-      });
-  
-      // 2. Update player stats if there's a referrer
-      if (savedReferrer) {
-        const playerRef = doc(db, 'players', savedReferrer);
-        const playerSnap = await getDoc(playerRef);
-        const playerData = playerSnap.exists() ? playerSnap.data() as PlayerData : null;
-  
-        if (playerData) {
-          const updates: {
-            totalInvites: number;
-            validInvites: {
-              total: number;
-              referrals: string[];
-            };
-            eligibleInvites: {
-              total: number;
-              referrals: string[];
-            };
-            invalidInvites?: {
-              total: number;
-              referrals: string[];
-            };
-          } = {
-            totalInvites: (playerData.totalInvites || 0) + 1,
-            validInvites: {
-              total: (playerData.validInvites?.total || 0) + 1,
-              referrals: [...(playerData.validInvites?.referrals || []), walletAddress]
-            },
-            eligibleInvites: {
-              total: 0,
-              referrals: []
-            }
-          };
-  
-          if (purchaseAmount >= 100) {
-            updates.eligibleInvites = {
-              total: (playerData.eligibleInvites?.total || 0) + 1,
-              referrals: [...(playerData.eligibleInvites?.referrals || []), walletAddress]
-            };
-          }
-  
-          if (playerData.invalidInvites?.referrals?.includes(walletAddress)) {
-            updates.invalidInvites = {
-              total: Math.max(0, (playerData.invalidInvites.total || 1) - 1),
-              referrals: playerData.invalidInvites.referrals.filter(r => r !== walletAddress)
-            };
-          }
-  
-          batch.set(playerRef, updates, { merge: true });
-        }
-      }
-  
-      // Commit database changes
-      await batch.commit();
-  
-      // Process blockchain transaction
+      
+      // Calculate SPIDER tokens (0.02 TON = 1 SPIDER)
+      const spiderAmount = purchaseAmount / 0.02;
+
+      // First process blockchain transaction
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 600,
         messages: [{
@@ -637,23 +574,82 @@ export default function Home() {
           amount: (purchaseAmount * 1e9).toString()
         }]
       });
-  
-      // Distribute rewards and refresh data
+
+      // After successful transaction, update database
+      const batch = writeBatch(db);
+      
+      // Get player doc
+      const playerDoc = doc(db, 'players', walletAddress);
+      const playerSnap = await getDoc(playerDoc);
+      
+      // Update player's SPIDER balance
+      const currentSpiderBalance = playerSnap.exists() ? (playerSnap.data().spiderBalance || 0) : 0;
+      const newSpiderBalance = currentSpiderBalance + spiderAmount;
+      
+      batch.set(playerDoc, {
+        spiderBalance: newSpiderBalance,
+      }, { merge: true });
+
+      // Create purchase record
+      const purchaseRef = doc(db, 'purchases', `${walletAddress}_${Date.now()}`);
+      batch.set(purchaseRef, {
+        buyer: walletAddress,
+        amount: purchaseAmount,
+        spiderAmount: spiderAmount,
+        timestamp: new Date().toISOString(),
+        status: 'completed', // Changed from 'pending' to 'completed'
+        referrer: savedReferrer
+      });
+
+      // Update referrer stats if exists
+      if (savedReferrer) {
+        const playerRef = doc(db, 'players', savedReferrer);
+        const playerSnap = await getDoc(playerRef);
+        const playerData = playerSnap.exists() ? playerSnap.data() as PlayerData : null;
+
+        if (playerData) {
+          const updates = {
+            totalInvites: (playerData.totalInvites || 0) + 1,
+            validInvites: {
+              total: (playerData.validInvites?.total || 0) + 1,
+              referrals: [...(playerData.validInvites?.referrals || []), walletAddress]
+            },
+            eligibleInvites: {
+              total: (playerData.eligibleInvites?.total || 0),
+              referrals: [...(playerData.eligibleInvites?.referrals || [])]
+            }
+          };
+
+          if (purchaseAmount >= 100) {
+            updates.eligibleInvites = {
+              total: (playerData.eligibleInvites?.total || 0) + 1,
+              referrals: [...(playerData.eligibleInvites?.referrals || []), walletAddress]
+            };
+          }
+
+          batch.set(playerRef, updates, { merge: true });
+        }
+      }
+
+      // Commit database changes after successful transaction
+      await batch.commit();
+
+      // Distribute rewards after successful purchase
       if (savedReferrer) {
         await distributeReferralRewards(savedReferrer, walletAddress);
       }
-  
-      // Update stats for both user and referrer
+
+      // Update UI
       await Promise.all([
         fetchReferralStats(),
         savedReferrer && updateReferrerStats(savedReferrer),
         fetchLeaderboard(),
         fetchBalances()
       ]);
-  
+
       setAmount("");
       showToast({ message: "Purchase successful!", type: "success" });
-  
+
     } catch (error: any) {
       console.error("Transaction error:", error);
       showToast({ message: error.message || "Transaction failed", type: "error" });
@@ -697,6 +693,11 @@ export default function Home() {
         message: "Please connect your wallet and enter a referral code",
         type: "error"
       });
+      return;
+    }
+
+    // Verify referral code format first
+    if (!await verifyReferralCode(referralCode)) {
       return;
     }
     
@@ -1028,15 +1029,22 @@ export default function Home() {
 
                   <div className="space-y-4">
                     <h3 className="text-xl font-semibold">Buy $SPIDER Tokens</h3>
-                    <p className="text-lg">0.02 TON = 1 $SPIDER</p>
-                    <Input
-                      type="number"
-                      placeholder="Enter TON amount"
-                      value={amount}
-                      onChange={(e) => setAmount(e.target.value)}
-                      className="bg-white/10 border-white/20 text-white placeholder:text-white/50"
-                      disabled={isLoading}
-                    />
+                    <div className="p-4 bg-white/5 rounded-lg">
+                      <p className="text-lg mb-2">Rate: 0.02 TON = 1 $SPIDER</p>
+                      <div className="flex flex-col gap-2">
+                        <Input
+                          type="number"
+                          placeholder="Enter TON amount"
+                          value={amount}
+                          onChange={(e) => setAmount(e.target.value)}
+                          className="bg-white/10 border-white/20 text-white placeholder:text-white/50"
+                          disabled={isLoading}
+                        />
+                        <div className="text-sm text-white/80">
+                          You will receive: {amount ? (parseFloat(amount) / 0.02).toFixed(2) : '0'} $SPIDER
+                        </div>
+                      </div>
+                    </div>
                     <Button
                       onClick={handleBuy}
                       className="w-full bg-[#28a745] hover:bg-[#28a745]/90"
