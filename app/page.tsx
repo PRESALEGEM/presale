@@ -278,20 +278,18 @@ export default function Home() {
 
     setIsFetchingBalances(true);
     try {
-      // Add database balance check
-      const playerDoc = doc(db, 'players', addressToUse);
+      // Get referral code from wallet address
+      const referralCode = addressToUse.slice(0, 8);
+
+      // Get player doc using referral code
+      const playerDoc = doc(db, 'players', referralCode);
       const playerSnap = await getDoc(playerDoc);
       const dbSpiderBalance = playerSnap.exists() ? (playerSnap.data().spiderBalance || 0) : 0;
       
-      // Use Promise.all to fetch both balances in parallel
-      const [tonResponse, jettonResponse] = await Promise.all([
-        fetch(`https://tonapi.io/v2/accounts/${addressToUse}`, {
-          headers: { 'Accept': 'application/json' }
-        }),
-        fetch(`https://tonapi.io/v2/accounts/${addressToUse}/jettons`, {
-          headers: { 'Accept': 'application/json' }
-        })
-      ]);
+      // Use Promise.all to fetch TON balance
+      const tonResponse = await fetch(`https://tonapi.io/v2/accounts/${addressToUse}`, {
+        headers: { 'Accept': 'application/json' }
+      });
 
       if (!tonResponse.ok) {
         console.error("TON API error:", tonResponse.status);
@@ -301,7 +299,7 @@ export default function Home() {
         setTonBalance((tonData.balance / 1e9).toFixed(2));
       }
 
-      // Set SPIDER balance from database
+      // Set SPIDER balance from player document
       setSpiderBalance(dbSpiderBalance.toFixed(2));
     } catch (error) {
       console.error("Error fetching balances:", error);
