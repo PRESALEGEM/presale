@@ -456,10 +456,10 @@ export default function Home() {
     if (!walletAddress) return;
     
     try {
-      const balanceDoc = doc(db, 'feeders_balances', walletAddress);
-      const docSnap = await getDoc(balanceDoc);
+      const playerDoc = doc(db, 'players', walletAddress);
+      const docSnap = await getDoc(playerDoc);
       
-      setFeedersBalance(docSnap.exists() ? docSnap.data().balance : 0);
+      setFeedersBalance(docSnap.exists() ? docSnap.data().feeders || 0 : 0);
     } catch (error) {
       console.error("Error fetching feeders balance:", error);
     }
@@ -474,22 +474,20 @@ export default function Home() {
       const FEEDERS_REWARD = 5;
       const timestamp = new Date().toISOString();
   
-      // Get current balances
-      const [referrerBalanceDoc, buyerBalanceDoc] = await Promise.all([
-        getDoc(doc(db, 'feeders_balances', referrerCode)),
-        getDoc(doc(db, 'feeders_balances', buyerAddress))
+      // Get current player docs
+      const [referrerDoc, buyerDoc] = await Promise.all([
+        getDoc(doc(db, 'players', referrerCode)),
+        getDoc(doc(db, 'players', buyerAddress))
       ]);
   
       // Update referrer's feeders
-      batch.set(doc(db, 'feeders_balances', referrerCode), {
-        balance: (referrerBalanceDoc.exists() ? referrerBalanceDoc.data().balance : 0) + FEEDERS_REWARD,
-        last_updated: timestamp
+      batch.set(doc(db, 'players', referrerCode), {
+        feeders: ((referrerDoc.exists() ? referrerDoc.data().feeders : 0) || 0) + FEEDERS_REWARD
       }, { merge: true });
   
       // Update buyer's feeders
-      batch.set(doc(db, 'feeders_balances', buyerAddress), {
-        balance: (buyerBalanceDoc.exists() ? buyerBalanceDoc.data().balance : 0) + FEEDERS_REWARD,
-        last_updated: timestamp
+      batch.set(doc(db, 'players', buyerAddress), {
+        feeders: ((buyerDoc.exists() ? buyerDoc.data().feeders : 0) || 0) + FEEDERS_REWARD
       }, { merge: true });
   
       // Record rewards
@@ -513,9 +511,7 @@ export default function Home() {
       await batch.commit();
   
       // Update UI for current user
-      if (buyerAddress === walletAddress) {
-        await fetchFeedersBalance();
-      } else if (referrerCode === userReferralCode) {
+      if (buyerAddress === walletAddress || referrerCode === userReferralCode) {
         await fetchFeedersBalance();
       }
   
@@ -537,21 +533,18 @@ export default function Home() {
   const updateFeedersBalance = async (userAddress: string, amount: number) => {
     const batch = writeBatch(db);
     try {
-      const balanceDoc = doc(db, 'feeders_balances', userAddress);
-      const docSnap = await getDoc(balanceDoc);
+      const playerDoc = doc(db, 'players', userAddress);
+      const docSnap = await getDoc(playerDoc);
       
-      const newBalance = docSnap.exists() ? 
-        docSnap.data().balance + amount : 
-        amount;
+      const currentFeeders = docSnap.exists() ? (docSnap.data().feeders || 0) : 0;
+      const newBalance = currentFeeders + amount;
 
-      batch.set(balanceDoc, {
-        balance: newBalance,
-        last_updated: new Date().toISOString()
+      batch.set(playerDoc, {
+        feeders: newBalance
       }, { merge: true });
 
       await batch.commit();
       
-      // If updating current user's balance, refresh the UI
       if (userAddress === walletAddress) {
         setFeedersBalance(newBalance);
       }
