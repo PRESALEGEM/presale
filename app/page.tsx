@@ -558,10 +558,9 @@ export default function Home() {
       const purchaseAmount = parseFloat(amount);
       if (!purchaseAmount || purchaseAmount <= 0) throw new Error("Invalid amount");
       
-      // Calculate SPIDER tokens (0.02 TON = 1 SPIDER)
       const spiderAmount = purchaseAmount / 0.02;
-
-      // First process blockchain transaction
+  
+      // Process blockchain transaction first
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 600,
         messages: [{
@@ -569,14 +568,15 @@ export default function Home() {
           amount: (purchaseAmount * 1e9).toString()
         }]
       });
-
-      // After successful transaction, update database
+  
       const batch = writeBatch(db);
-      
-      // Get player doc
+  
+      // Update buyer's document
       const playerDoc = doc(db, 'players', userReferralCode);
       const playerSnap = await getDoc(playerDoc);
-      const playerData = playerSnap.exists() ? playerSnap.data() as PlayerData : {
+      
+      // Update player's SPIDER balance
+      const currentData = playerSnap.exists() ? playerSnap.data() as PlayerData : {
         walletAddress: walletAddress,
         spiderBalance: 0,
         feeders: 0,
@@ -588,54 +588,83 @@ export default function Home() {
         createdAt: new Date().toISOString(),
         lastUpdated: new Date().toISOString()
       };
-
-      // Update player's SPIDER balance
-      const newSpiderBalance = (playerData.spiderBalance || 0) + spiderAmount;
+  
+      const newSpiderBalance = (currentData.spiderBalance || 0) + spiderAmount;
       
       batch.set(playerDoc, {
-        ...playerData,
+        ...currentData,
         spiderBalance: newSpiderBalance,
         lastUpdated: new Date().toISOString()
       }, { merge: true });
-
+  
       // Update referrer stats if exists
       if (savedReferrer) {
-        const playerRef = doc(db, 'players', savedReferrer);
-        const playerSnap = await getDoc(playerRef);
-        const playerData = playerSnap.exists() ? playerSnap.data() as PlayerData : null;
-
-        if (playerData) {
-          const updates = {
-            totalInvites: (playerData.totalInvites || 0) + 1,
-            validInvites: {
-              total: (playerData.validInvites?.total || 0) + 1,
-              referrals: [...(playerData.validInvites?.referrals || []), walletAddress]
-            },
-            eligibleInvites: {
-              total: (playerData.eligibleInvites?.total || 0),
-              referrals: [...(playerData.eligibleInvites?.referrals || [])]
+        const referrerDoc = doc(db, 'players', savedReferrer);
+        const referrerSnap = await getDoc(referrerDoc);
+        const referrerData = referrerSnap.exists() ? referrerSnap.data() as PlayerData : null;
+  
+        if (referrerData) {
+          const isFirstPurchase = !referrerData.validInvites.referrals.includes(walletAddress);
+          const updates: any = {};
+  
+          if (isFirstPurchase) {
+            // Remove from invalid invites if present
+            if (referrerData.invalidInvites?.referrals?.includes(walletAddress)) {
+              updates.invalidInvites = {
+                total: Math.max((referrerData.invalidInvites?.total || 0) - 1, 0),
+                referrals: referrerData.invalidInvites.referrals.filter(addr => addr !== walletAddress)
+              };
             }
-          };
-
-          if (purchaseAmount >= 100) {
+  
+            // Add to valid invites only if not already present
+            updates.validInvites = {
+              total: (referrerData.validInvites?.total || 0) + 1,
+              referrals: [...(referrerData.validInvites?.referrals || []), walletAddress]
+            };
+  
+            // First purchase feeders reward
+            if (!referrerData.feedersClaimed?.includes(walletAddress)) {
+              updates.feeders = (referrerData.feeders || 0) + 5;
+              updates.feedersClaimed = [...(referrerData.feedersClaimed || []), walletAddress];
+  
+              // Also give feeders to buyer
+              batch.set(playerDoc, {
+                feeders: (currentData.feeders || 0) + 5,
+                feedersClaimed: [...(currentData.feedersClaimed || []), savedReferrer]
+              }, { merge: true });
+            }
+          }
+  
+          // Handle eligible invites for large purchases
+          const isEligiblePurchase = purchaseAmount >= 100;
+          if (isEligiblePurchase && !referrerData.eligibleInvites.referrals.includes(walletAddress)) {
             updates.eligibleInvites = {
-              total: (playerData.eligibleInvites?.total || 0) + 1,
-              referrals: [...(playerData.eligibleInvites?.referrals || []), walletAddress]
+              total: (referrerData.eligibleInvites?.total || 0) + 1,
+              referrals: [...(referrerData.eligibleInvites?.referrals || []), walletAddress]
             };
           }
-
-          batch.set(playerRef, updates, { merge: true });
+  
+          // Only update if there are changes
+          if (Object.keys(updates).length > 0) {
+            batch.set(referrerDoc, updates, { merge: true });
+          }
         }
       }
-
-      // Commit database changes after successful transaction
+  
+      // Create purchase record
+      const purchaseRef = doc(db, 'purchases', `${walletAddress}_${Date.now()}`);
+      batch.set(purchaseRef, {
+        buyer: walletAddress,
+        amount: purchaseAmount,
+        spiderAmount: spiderAmount,
+        timestamp: new Date().toISOString(),
+        status: 'completed',
+        referrer: savedReferrer
+      });
+  
+      // Commit all changes
       await batch.commit();
-
-      // Distribute rewards after successful purchase
-      if (savedReferrer) {
-        await distributeReferralRewards(savedReferrer, walletAddress);
-      }
-
+  
       // Update UI
       await Promise.all([
         fetchReferralStats(),
@@ -643,10 +672,10 @@ export default function Home() {
         fetchLeaderboard(),
         fetchBalances()
       ]);
-
+  
       setAmount("");
       showToast({ message: "Purchase successful!", type: "success" });
-
+  
     } catch (error: any) {
       console.error("Transaction error:", error);
       showToast({ message: error.message || "Transaction failed", type: "error" });
