@@ -143,33 +143,18 @@ export default function Home() {
 
           const batch = writeBatch(db);
 
-          // Initialize user document
-          const userDoc = doc(db, 'users', walletAddress);
-          const userSnap = await getDoc(userDoc);
-          if (!userSnap.exists()) {
-            batch.set(userDoc, {
-              address: walletAddress,
-              referralCode: referralCode,
-              createdAt: new Date().toISOString(),
-              totalPurchases: 0,
-              lastActive: new Date().toISOString()
-            });
-          } else {
-            batch.update(userDoc, {
-              lastActive: new Date().toISOString()
-            });
-          }
-
-          // Initialize player document
+          // Initialize player document ONLY using referral code
           const playerDoc = doc(db, 'players', referralCode);
           const playerSnap = await getDoc(playerDoc);
+
+          // Only create new player document if it doesn't exist
           if (!playerSnap.exists()) {
             batch.set(playerDoc, {
               walletAddress: walletAddress,
-              totalInvites: 0,          // Add spiderBalance field
-              spiderBalance: 0,  // Add this field
-              feeders: 0,med: [],        // Add feedersClaimed array
-              feedersClaimed: [], // Add this field
+              totalInvites: 0,
+              spiderBalance: 0,
+              feeders: 0,
+              feedersClaimed: [],
               validInvites: {
                 total: 0,
                 referrals: []
@@ -183,6 +168,11 @@ export default function Home() {
                 referrals: []
               },
               createdAt: new Date().toISOString(),
+              lastUpdated: new Date().toISOString()
+            });
+          } else {
+            // Just update lastActive if document exists
+            batch.update(playerDoc, {
               lastUpdated: new Date().toISOString()
             });
           }
@@ -561,7 +551,7 @@ export default function Home() {
 
   // Update the existing handleBuy function to track purchases
   const handleBuy = async () => {
-    if (!connected || !walletAddress) return;
+    if (!connected || !walletAddress || !userReferralCode) return;
     setIsLoading(true);
   
     try {
@@ -584,28 +574,29 @@ export default function Home() {
       const batch = writeBatch(db);
       
       // Get player doc
-      const playerDoc = doc(db, 'players', walletAddress);
+      const playerDoc = doc(db, 'players', userReferralCode);
       const playerSnap = await getDoc(playerDoc);
-      
+      const playerData = playerSnap.exists() ? playerSnap.data() as PlayerData : {
+        walletAddress: walletAddress,
+        spiderBalance: 0,
+        feeders: 0,
+        feedersClaimed: [],
+        totalInvites: 0,
+        validInvites: { total: 0, referrals: [] },
+        eligibleInvites: { total: 0, referrals: [] },
+        invalidInvites: { total: 0, referrals: [] },
+        createdAt: new Date().toISOString(),
+        lastUpdated: new Date().toISOString()
+      };
+
       // Update player's SPIDER balance
-      const currentSpiderBalance = playerSnap.exists() ? (playerSnap.data().spiderBalance || 0) : 0;
-      const newSpiderBalance = currentSpiderBalance + spiderAmount;
+      const newSpiderBalance = (playerData.spiderBalance || 0) + spiderAmount;
       
       batch.set(playerDoc, {
+        ...playerData,
         spiderBalance: newSpiderBalance,
         lastUpdated: new Date().toISOString()
       }, { merge: true });
-
-      // Create purchase record
-      const purchaseRef = doc(db, 'purchases', `${walletAddress}_${Date.now()}`);
-      batch.set(purchaseRef, {
-        buyer: walletAddress,
-        amount: purchaseAmount,
-        spiderAmount: spiderAmount,
-        timestamp: new Date().toISOString(),
-        status: 'completed', // Changed from 'pending' to 'completed'
-        referrer: savedReferrer
-      });
 
       // Update referrer stats if exists
       if (savedReferrer) {
