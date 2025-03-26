@@ -23,16 +23,11 @@ import {
   getDocs, 
   setDoc, 
   updateDoc, 
-  query, 
-  where, 
-  orderBy, 
-  limit,
   writeBatch,
-  increment,
-  runTransaction
 } from 'firebase/firestore';
 import { Toast } from "@/components/ui/toast";
 import { useToast } from "@/hooks/use-toast"
+import { SummonModal } from "@/components/SummonModal";
 
 // Create a simple toast interface for this component
 interface ToastProps {
@@ -121,6 +116,7 @@ export default function Home() {
     message: string;
     type: "success" | "error" | "info";
   }>>([]);
+  const [isSummonModalOpen, setIsSummonModalOpen] = useState(false);
 
   const removeToast = (id: string) => {
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
@@ -963,6 +959,9 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-[#1a1b3b] to-[#2a2b5b] flex items-center justify-center p-4">
+      {/* Add SummonModal */}
+      <SummonModal isOpen={isSummonModalOpen} onClose={() => setIsSummonModalOpen(false)} />
+      
       <div className="max-w-[800px] w-full text-center p-5">
         <div className="mb-8">
           <div className="w-32 h-32 mx-auto mb-6">
@@ -998,10 +997,11 @@ export default function Home() {
         </div>
 
         <Tabs defaultValue="buy" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-3 bg-white/10">
+          <TabsList className="grid w-full grid-cols-4 bg-white/10">
             <TabsTrigger value="buy">Buy Tokens</TabsTrigger>
             <TabsTrigger value="referral">Referral</TabsTrigger>
             <TabsTrigger value="leaderboard">Leaderboard</TabsTrigger>
+            <TabsTrigger value="summon">Summon</TabsTrigger>
           </TabsList>
 
           <TabsContent value="buy">
@@ -1350,6 +1350,38 @@ export default function Home() {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {/* Add new Summon tab content */}
+          <TabsContent value="summon">
+            <Card className="bg-white/10 backdrop-blur-lg border-none text-white">
+              <CardHeader>
+                <CardTitle className="text-2xl">Spider Summoning</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-6">
+                  <div className="space-y-2 text-lg">
+                    <div className="flex items-center justify-between">
+                      <p>$SPIDER Balance:</p>
+                      <p>{spiderBalance} $SPIDER</p>
+                    </div>
+                  </div>
+                  <Button
+                    onClick={() => setIsSummonModalOpen(true)}
+                    className="w-full bg-gradient-to-r from-[#3c28a7] to-[#9f2dfd] hover:from-[#3c28a7]/80 hover:to-[#9f2dfd]/80"
+                    disabled={!connected}
+                  >
+                    Open Summoning Portal
+                  </Button>
+                  {!connected && (
+                    <p className="text-sm text-white/70">
+                      Connect wallet to summon spiders
+                    </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
         </Tabs>
       </div>
       {/* Update the toast container */}
